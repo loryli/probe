@@ -2,7 +2,7 @@
 
 个人自用的 AI 面试练习工具，首发面向大模型应用开发 / AI 全栈。根据简历项目与个人题库动态提问，用带来源证据的记录复盘。
 
-目前已实现 **后端基础骨架、个人题库、简历与项目管理页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，以及 PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存。页面直接操作后端保存的数据。Planner、面试和复盘尚未实现。项目设计见 [设计文档入口](docs/README.md)。
+目前已实现 **后端基础骨架、个人题库、简历与项目、面试计划（Planner）页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存，以及固定资料版本的考察目标、题源与时间预算规划和人工确认。页面直接操作后端保存的数据。文字面试运行时、实时事件、复盘与记忆尚未实现。项目设计见 [设计文档入口](docs/README.md)。
 
 ## 当前基础架构
 
@@ -32,6 +32,7 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 
 - 题库页面：<http://127.0.0.1:8000/>，在浏览器中直接管理题目。
 - 简历与项目：<http://127.0.0.1:8000/materials>，也可从页面导航进入。
+- 面试计划：<http://127.0.0.1:8000/planner>，配置资料版本并生成、确认计划。
 - Apifox 导入地址：<http://127.0.0.1:8000/openapi.json>，操作见下方「使用 Apifox 调试」。
 - 进程存活：`GET /health/live`，成功返回 HTTP 200。
 - 数据库就绪：`GET /health/ready`，本地数据库准备好后返回 HTTP 200；未配置或无法连接所选数据库时返回 HTTP 503。
@@ -150,6 +151,43 @@ INTERVIEW_QWEN_MAX_OUTPUT_TOKENS=8192
 
 首次使用只需按原命令重启服务，local SQLite 自动升级到 `0005_resume_parse_draft`；显式 MySQL 需手动 `alembic upgrade head`。网络调用复用现有 `httpx2` 包，已将其声明移到运行依赖，不引入供应商 SDK。
 
+## 面试准备与 Planner
+
+打开 <http://127.0.0.1:8000/planner> 或点击侧栏「面试计划」。本轮只做面试前的规划闭环，不启动实时面试、不做逐轮分析与复盘。
+
+1. 选择简历与具体简历版本，勾选该版本中已核对的项目（最多 8 个）和启用题库中的题目（最多 40 道）。未核对、版本不匹配、已停用或已删除的资料会被排除并给出提示。
+2. 填写考察方向（可留空）、预计时长（10–180 分钟）、项目题时间比例与追问总上限（0 为自动）。目标时长只是节奏参考，到时不强制结束。
+3. 选择生成方式后点击「生成计划」。模型模式复用上一节的 Qwen 配置与 `ai/qwen.py` 适配器，仅发送已核对项目事实与启用题干，不发送简历全文、标准答案或复习笔记；规则模式完全在本地按资料分块生成，不调用模型，适合核对流程或密钥未就绪时使用。
+4. 计划输出考察目标（主题、来源、优先级、可观察证据、完成规则、事实与题目引用）、题源时间预算、开场与收尾缓冲、追问总上限与每目标上限，以及分区提示。**不输出固定问题清单，也不生成任何具体问题文本**。摘要、比例换算、时间分配、追问配额、目标编号、覆盖率与引用校验全部由服务端程序生成，模型只返回语义骨架。
+5. 结果区按来源分区显示「系统校验与统计」「模型提示 · 未经核验」「产品规则」；含与所选简历版本不符的版本号的模型提示会被剔除。每个目标可展开核对引用的事实原文与启用题干，并查看预编译的运行时上下文；覆盖率卡片显示实际被目标引用的事实与题目数量。
+6. 可查看历史计划、调整输入后重新生成（每次生成是一条新记录，不覆盖旧计划）、确认保存或逻辑删除。确认前复核固定引用：简历版本、已核对项目与启用题目若被修改或停用，需重新生成后再确认。
+7. 生成失败时计划记录保留错误码与提示，输入不丢失；生成期间显示等待秒数；刷新或「读取本次结果」只读取原任务，不重复调用模型，也不自动重试收费请求。
+
+### 规划质量与实时链路约束
+
+Planner 决定后续提问水平，也影响语音对答的反应速度，因此按以下原则收敛：
+
+- **模型职责最小化**：发给模型的只有项目事实摘要（每条至多 120 字）与启用题干（每道至多 80 字），不含简历全文、标准答案或笔记；模型只输出主题、来源、优先级、引用 ID、最多 3 条能力维度与简短完成规则，不输出摘要、时间、预算或具体技术细节，也不复述技术路径、指标与版本号。
+- **输出偏差不导致整份失败**：模型输出在结构校验前统一裁剪长度、数量与未知字段；服务端另扫描目标文本中的异常版本号，并剔除无效资料引用。
+- **提示分层**：模型自评一律标注「未经核验」，不与系统校验结果、产品规则混排；含未核验版本号的条目直接剔除，目标数按预计时长程序化确定（4–8 个）。
+- **追问配额公平分配**：先给每个有意愿的目标保底 1 次，再按优先级分配剩余额度，避免尾部目标全部为 0 追问。
+- **零 join 的运行时投影**：生成时按目标预编译 `runtime_context`（主题、完成规则、预算、引用事实原文与启用题干），随计划持久化。`GET /interview-plans/{id}/runtime` 只返回已确认计划的精简投影，不含快照全文；后续 Fast Path 与语音链路一次读取即可拼装上下文，无需关联多张表或再调用模型。
+- **旧计划兼容**：新增字段均为可选，优化前生成的计划仍可读取；其未分区的提示在页面上统一按「模型自评」展示并标注。本轮提示词版本为 `planner_prompt.v2` / `planner_rule.v2`，可用结果页元信息区分新旧计划。
+
+计划固定引用所选简历版本，并保存生成时的项目事实 ID、题目 ID 与题目内容版本快照。首次使用需按原命令重启服务，local SQLite 自动升级到 `0006_interview_plan`；显式 MySQL 需手动 `alembic upgrade head`。本轮未新增依赖，也未运行迁移、测试、静态检查、浏览器验证或模型试调用。
+
+新增接口（更新 Apifox 的 `/openapi.json` 导入）：
+
+| 路径 | 行为 |
+|---|---|
+| `GET /interview-plans/options?resume_id=...&source_version=...` | 只读返回可选简历、版本、已核对项目、启用题目与模型配置状态，不调用模型。 |
+| `POST /interview-plans` | 提交 `request_id` UUID 与配置，主动生成一份计划；相同标识与配置重放原计划（HTTP 200），不重复调用模型。 |
+| `GET /interview-plans` | 分页读取计划列表，不调用模型。 |
+| `GET /interview-plans/{id}` | 读取计划、输入、资料快照、结果与确认状态。 |
+| `GET /interview-plans/{id}/runtime` | 读取已确认计划的精简运行时投影（目标 + 预编译上下文 + 预算 + 约束），供实时/语音链路直接使用；未确认返回 409。 |
+| `POST /interview-plans/{id}/confirm` | 提交 `expected_revision`，复核引用后确认保存；重复确认幂等。 |
+| `DELETE /interview-plans/{id}?expected_revision=1` | 逻辑删除计划。 |
+
 ## 使用 Apifox 调试
 
 简历与项目 API 也包含在同一份 OpenAPI 定义中，更新导入即可查看。PDF 上传接口 `POST /materials/documents/pdf?file_name=简历.pdf` 使用 **binary 请求体**，Content-Type 为 `application/pdf`，不使用 multipart，也不填写本机路径。
@@ -196,7 +234,7 @@ INTERVIEW_DATABASE_URL=mysql+aiomysql://interview:password@127.0.0.1:3306/interv
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，以及资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
+迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`，以及面试计划的 `interview_plan`（当前 head 为 `0006_interview_plan`）。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
 
 `.env`、虚拟环境与 `data/` 不进入版本控制。请勿将简历、题库、数据库凭据或模型密钥加入源码仓库。
 
@@ -220,13 +258,14 @@ src/interview_assistant/
     router.py         本地模型配置状态接口
   question_bank/      题库模型、Markdown 提取与导入事务、请求/响应结构及 API
   materials/          PDF/OCR、简历版本、项目事实、AI 提取草稿与人工确认 API
-  web/                题库、导入预览、简历与项目页面，同源调用现有 API
+  planner/            面试计划模型、结构化输出契约、生成与确认服务及 API
+  web/                题库、导入预览、简历与项目、面试计划页面，同源调用现有 API
 migrations/           Alembic 迁移环境和版本脚本
 data/                 本地 SQLite 数据，已忽略版本控制
 tests/                使用临时文件数据库的离线检查
 ```
 
-后续逐步加入题库元数据、Planner、面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
+后续逐步加入题库元数据写入、文字面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
 
 ## 题库 API
 
@@ -271,7 +310,7 @@ Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
 
 ## 检查命令
 
-按用户约定，日常开发默认不由助手主动运行测试、静态检查或浏览器验证，由用户启动服务后体验；以下命令仅供需要时手工执行。此次简历与项目功能及新增 PDF 依赖尚未运行验证。
+按用户约定，日常开发默认不由助手主动运行测试、静态检查或浏览器验证，由用户启动服务后体验；以下命令仅供需要时手工执行。简历与项目、PDF/OCR、Qwen 提取以及本轮新增的面试计划功能均尚未运行验证。
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff format --check .
@@ -293,3 +332,9 @@ Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
 - 模型优先 Qwen 系列，具体型号与接入参数后续确定。
 
 Markdown 首版切分与预览行为见上文；更复杂的笔记格式后续按实际文件补充。设计稿中“时长是硬边界”“时间到结束”的旧表述后续需按上述确认同步。
+
+## 本轮交接
+
+- **本轮完成项**：先在上一轮建立 Planner 前后端闭环（`planner/`、迁移 `0006_interview_plan`、页面 `/planner`、模型模式 + 规则模式）；本轮针对真实运行结果做模块内优化：压缩模型输入/输出（题干 80 字、事实 120 字、证据 ≤3 条、完成规则 ≤120 字），模型只输出语义骨架；摘要、预算、追问配额、覆盖率、`runtime_context` 全部由服务端程序生成；提示按「系统校验 / 模型提示（未经核验）/ 产品规则」分区并剔除含错误版本号的模型自评；追问保底分配；目标可展开核对引用原文；新增 `GET /interview-plans/{id}/runtime` 精简投影供实时与语音链路零 join 使用；新增生成等待计时、覆盖率卡片、元信息分隔符；输出契约向后兼容旧计划。提示词版本升至 `planner_prompt.v2` / `planner_rule.v2`，无需新迁移或新依赖。
+- **遗留问题**：本轮按约定未运行迁移、测试、静态检查、浏览器验证或模型试调用，需由用户启动服务后体验；优化效果（延迟、token、目标质量）需重新生成一份计划才能对比，本轮未验证。Qwen 提取草稿与 OCR 仍属「已有实现但未验收」；`tests/test_local_database.py` 与 `tests/test_question_bank.py` 中仍有 0002 时代的版本/表集合断言，与当前 head 不一致；`materials/`、`ai/`、`planner/` 暂无行为测试。目标文本与引用事实之间仍只做 ID 有效性校验、不做语义支撑校验，需靠页面引用明细人工核对。
+- **下一步**：文字面试闭环（按已确认计划 → 统一 Agent 动态提问 → 保存对话 → 暂停/跳过/结束），直接消费 `runtime_context` 与 `GET /interview-plans/{id}/runtime`。题库 AI 标签分类优先级低于该闭环；语音、复杂能力模型、知识图谱、多用户与部署扩展继续后置。每轮交付后按同样三段格式更新本节，避免重新梳理整个项目。

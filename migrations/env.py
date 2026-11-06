@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
 from interview_assistant.materials.models import Resume
+from interview_assistant.planner.models import InterviewPlan  # noqa: F401 — 注册面试计划表
 from interview_assistant.question_bank.models import Question  # noqa: F401 — 注册题库表
 
 config = context.config
