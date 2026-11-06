@@ -1,6 +1,8 @@
 from datetime import datetime
 from uuid import uuid4
 
+from pydantic import JsonValue
+
 from sqlalchemy import (
     JSON, Boolean, CheckConstraint, ForeignKey, ForeignKeyConstraint,
     Index, Integer, LargeBinary, String, Text, text,
@@ -118,6 +120,41 @@ class Project(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __mapper_args__ = {"version_id_col": revision}
+
+
+class ResumeParseDraft(Base):
+    __tablename__ = "resume_parse_draft"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["resume_id", "source_version"],
+            ["resume_version.resume_id", "resume_version.version"], ondelete="RESTRICT",
+        ),
+        CheckConstraint("status IN ('running', 'ready', 'confirmed', 'failed')", name="ck_resume_parse_status"),
+        CheckConstraint("revision >= 1", name="ck_resume_parse_revision"),
+        Index("ix_resume_parse_listing", "resume_id", "created_at", "id"),
+        table_options,
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    resume_id: Mapped[str] = mapped_column(String(36))
+    source_version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    provider: Mapped[str] = mapped_column(String(32), default="qwen")
+    model: Mapped[str] = mapped_column(String(150))
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(64))
+    result_json: Mapped[dict[str, JsonValue]] = mapped_column(JSON, default=dict)
+    confirmed_projects_json: Mapped[dict[str, dict[str, str]]] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __mapper_args__ = {"version_id_col": revision}
 

@@ -2,7 +2,7 @@
 
 个人自用的 AI 面试练习工具，首发面向大模型应用开发 / AI 全栈。根据简历项目与个人题库动态提问，用带来源证据的记录复盘。
 
-目前已实现 **后端基础骨架、个人题库、简历与项目管理页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，以及 PDF 原件保存、文字提取与本地 OCR、简历版本、项目和人工事实维护。页面直接操作后端保存的数据。Qwen 接入、AI 项目提取、Planner、面试和复盘尚未实现。项目设计见 [设计文档入口](docs/README.md)。
+目前已实现 **后端基础骨架、个人题库、简历与项目管理页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，以及 PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存。页面直接操作后端保存的数据。Planner、面试和复盘尚未实现。项目设计见 [设计文档入口](docs/README.md)。
 
 ## 当前基础架构
 
@@ -11,7 +11,7 @@
 - Pydantic Settings 读取环境变量和 `.env`，敏感配置使用 SecretStr。
 - SQLAlchemy 2.0 异步数据库会话；本地默认 SQLite，支持显式选择 MySQL，事务由业务服务管理。
 - SSE 事件编码与流响应工具；尚未提供业务事件订阅、持久化或断线重放。
-- 模型结构化输出协议；优先为未来 Qwen 接入提供边界，尚无供应商实现或模型调用。
+- 供应商无关的结构化输出协议，以及 Qwen Chat Completions 适配器；请求限时、JSON 校验、调用用量与脱敏错误记录。
 - UTC 应用日志、健康检查、离线测试、格式/静态检查和 GitHub Actions 配置。
 
 ## 本地启动
@@ -81,7 +81,7 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 3. 默认「自动」模式先提取文字，对有效文字不足 20 个字母/数字/汉字的页面进行本地 OCR；混合 PDF 按页处理，不重复拼接原有页眉。可选「整份 PDF 使用 OCR」处理提取错乱或文字较多但仍有扫描内容的文件，或选「仅提取已有文字」关闭 OCR。加密 PDF 仍需先导出未加密副本。OCR 可能出现错字、数字或顺序错误，请人工核对。[文字提取限制见 pypdf 官方说明](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)。
 4. 上传 PDF 时先保存原件和提取结果，点击「保存简历」才创建简历或新版本。相同 PDF 字节复用同一份原件，并沿用首次文件名；关闭页面不删除上传原件。原始字节不被 OCR 或人工修正改写。已有 PDF 可更改识别方式后点击「重新识别当前 PDF」，核对结果后再保存；未保存前不会更新简历，也不改变已有项目依据。
 5. 保存简历后，在「项目与事实」新建项目，维护名称、职责、时间、技术栈、说明和事实。每条事实可记录类型、内容与可选原文引用；引用必须匹配该项目所绑定简历版本中的连续文字。复制导致的换行差异可匹配，入库仍保留来源中的原始换行。无引用的条目明确标为「手工补充」。
-6. 可勾选「我已核对」；继续编辑项目会取消该勾选，保存前可重新确认。本轮没有 Qwen 调用，也不自动生成项目事实。OCR 只用于 PDF 文字识别，Markdown 题库中的图片仍不识别。
+6. 可勾选「我已核对」；继续编辑项目会取消该勾选，保存前可重新确认。现在可使用下方 Qwen 提取草稿流程辅助整理，仍需人工核对。OCR 只用于 PDF 文字识别，Markdown 题库中的图片仍不识别。
 7. 简历名称、文字或来源变化时原子保存新版本；启停只更新修改版本。历史页可读取旧文字及对应 PDF。项目固定绑定创建时的简历版本，更新简历不会悄悄重绑来源；如需基于新版重新整理，可创建新项目。
 
 OCR 输出根据文本框坐标合并同一视觉行，按标题、条目和长句整理分段，不再把每个文本框直接作为独立段落。对「姓／名：」等有冒号佐证的已知字段修复断行，不修改词句、数字或推测缺失内容。已载入或粘贴的文字也可点击「整理换行」，结果只进入当前草稿，可立即「撤销整理」；手工继续编辑或保存后清除该次撤销入口。复杂多栏、旋转文字和识别杂字符仍需人工核对。
@@ -110,6 +110,45 @@ OCR 使用 [RapidOCR 与 ONNX Runtime](https://rapidai.github.io/RapidOCRDocs/ma
 | `GET/PUT/DELETE /materials/resumes/{id}/projects/{project_id}` | 读取、保存项目与事实完整内容或逻辑删除。 |
 
 资料的 `PUT` 接口提交完整可编辑内容和 `expected_revision`；项目来源版本创建后不可改写，事实随项目在同一事务中保存。`POST` 创建可带 UUID `Idempotency-Key`，同一标识与内容重复请求返回已有记录（HTTP 200）；不同内容或已删除记录返回 409。删除通过查询参数提交 `expected_revision`。详细结构以 OpenAPI 为准。
+
+## Qwen 提取项目与事实
+
+在本地 `.env` 配置（密钥不发到聊天中，也不要提交仓库）：
+
+```dotenv
+INTERVIEW_QWEN_API_KEY=你的百炼APIKey
+INTERVIEW_QWEN_MODEL=qwen-plus
+INTERVIEW_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+INTERVIEW_QWEN_ENABLE_THINKING=false
+INTERVIEW_QWEN_TIMEOUT_SECONDS=120
+INTERVIEW_QWEN_MAX_OUTPUT_TOKENS=8192
+```
+
+`qwen-plus` 是可替换的配置示例，不锁定最终型号。接口使用 Chat Completions 的 JSON Object 模式，并由 Pydantic 校验实际结构；所选模型需支持对应 JSON/思考模式组合。默认接口地址是北京地域现有域名，也可改为百炼控制台的业务空间专属地址；密钥和接口需同地域。[百炼兼容接口说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[结构化输出说明](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。
+
+重启后进入「简历与项目 → 项目与事实」：
+
+1. 先保存并核对简历文字，再点击「AI 提取项目」。仅此操作发送已保存版本文字到所配置的 Qwen 接口，不上传原始 PDF；最多处理 60000 字符，超出时提示精简，不静默截断。
+2. 提取结果保存为待确认草稿，显示候选项目、事实原文引用、模型自评置信度、需确认事项和调用用量。没有可匹配引用的项目或事实会被排除并提示；引用匹配只证明来源存在，仍需人工判断内容是否被正确概括。
+3. 对候选点击「载入编辑」，在已有项目编辑区修正名称、职责、时间、技术栈、说明与事实。未知字段留空，不根据技术名词自动补写实现细节，也不替用户修复简历缺失句子。
+4. 勾选「我已核对」后点击「确认并保存项目」。每个候选独立确认，在一个事务中保存项目、事实与确认映射；重复提交相同内容读取已保存项目，不重复创建。已保存候选需从项目列表修改，删除后不会因重试重新创建。
+5. 提取草稿持久化，可刷新结果、切换历史提取记录及分页查看；刷新/读取记录不调用模型。新提取记录不会覆盖原简历或已有项目，不同提取任务之间不做语义去重。
+
+超时或网络错误时页面保留请求标识；点击「读取本次结果」复用该标识，不发起第二次调用。已明确失败的提取不会自动重试，手动点击「AI 提取项目」才创建新任务和新模型调用。因重启等原因遗留的运行中任务在超时宽限期后标为失败，不自动续跑。已有草稿和人工项目管理不依赖模型密钥。
+
+每次任务记录模型、prompt/schema 版本、状态、耗时、服务端返回的输入/输出 token 用量及脱敏错误码；不存储无效模型原始响应，不记录密钥、请求正文或简历到日志。提取和确认均固定引用具体简历版本，后续修改简历不重绑依据。运行期间的 JSON 与来源校验属于业务逻辑；本轮未运行测试、浏览器验证，也未实际调用 Qwen。
+
+新增接口（更新 Apifox 的 `/openapi.json` 导入）：
+
+| 路径 | 行为 |
+|---|---|
+| `GET /ai/status` | 只读取本地配置状态与模型名，不发网络请求，不返回密钥。 |
+| `POST /materials/resumes/{id}/parse-drafts` | 提交 `request_id` UUID 和 `source_version`，提取或重放已有任务。返回草稿；模型调用失败体现在 `status/error_code/error_message`，不创建项目。 |
+| `GET /materials/resumes/{id}/parse-drafts` | 分页读取提取历史，`limit` 最多 20。 |
+| `GET /materials/resumes/{id}/parse-drafts/{draft_id}` | 读取任务结果、revision 和已确认候选映射。 |
+| `POST /materials/resumes/{id}/parse-drafts/{draft_id}/confirm` | 提交候选序号、`expected_revision`、完整可编辑项目字段和 `user_verified=true`，确认一个项目。 |
+
+首次使用只需按原命令重启服务，local SQLite 自动升级到 `0005_resume_parse_draft`；显式 MySQL 需手动 `alembic upgrade head`。网络调用复用现有 `httpx2` 包，已将其声明移到运行依赖，不引入供应商 SDK。
 
 ## 使用 Apifox 调试
 
@@ -157,7 +196,7 @@ INTERVIEW_DATABASE_URL=mysql+aiomysql://interview:password@127.0.0.1:3306/interv
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，以及资料管理的 `resume_document`、`resume_extraction`、`resume`、`resume_version`、`project`、`project_fact`。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
+迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，以及资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
 
 `.env`、虚拟环境与 `data/` 不进入版本控制。请勿将简历、题库、数据库凭据或模型密钥加入源码仓库。
 
@@ -177,15 +216,17 @@ src/interview_assistant/
     sse.py            SSE 编码和响应工具
   ai/
     protocol.py       与供应商无关的结构化输出协议
+    qwen.py           Qwen 结构化调用、超时、用量与脱敏错误
+    router.py         本地模型配置状态接口
   question_bank/      题库模型、Markdown 提取与导入事务、请求/响应结构及 API
-  materials/          PDF 原件、文字提取/本地 OCR、简历版本、项目事实与 API
+  materials/          PDF/OCR、简历版本、项目事实、AI 提取草稿与人工确认 API
   web/                题库、导入预览、简历与项目页面，同源调用现有 API
 migrations/           Alembic 迁移环境和版本脚本
 data/                 本地 SQLite 数据，已忽略版本控制
 tests/                使用临时文件数据库的离线检查
 ```
 
-后续逐步加入 Qwen 与 AI 资料提取、题库元数据、Planner、面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
+后续逐步加入题库元数据、Planner、面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
 
 ## 题库 API
 

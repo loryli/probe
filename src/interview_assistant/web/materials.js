@@ -1,3 +1,5 @@
+import { setupAiProjects } from "./ai_projects.js";
+
 const $ = (id) => document.getElementById(id);
 const base = "/materials/resumes";
 const pageSize = 20;
@@ -6,7 +8,7 @@ const state = {
   documentId: null, fileName: "", importedText: "", source: null,
   resumes: [], resumeTotal: 0, resumeOffset: 0, search: "",
   projects: [], projectTotal: 0, projectOffset: 0,
-  versionTotal: 0, versionOffset: 0, tab: "resume", creation: {}, formatUndo: null,
+  versionTotal: 0, versionOffset: 0, tab: "resume", creation: {}, formatUndo: null, aiCandidate: null,
 };
 const normalized = (value) => value.replace(/\r\n?/g, "\n");
 const originalText = (value, original = "") => value === normalized(original) ? original : value;
@@ -137,6 +139,8 @@ function updateControls() {
   $("reextract-pdf").hidden = !state.documentId;
   $("format-resume-text").disabled = !$("resume-text").value.trim();
   $("undo-text-format").hidden = state.formatUndo === null;
+  $("save-project").textContent = state.aiCandidate ? "确认并保存项目 ↗" : "保存项目 ↗";
+  $("reload-project").textContent = state.aiCandidate ? "同步提取状态" : "读取最新项目";
 }
 
 async function operate(action) {
@@ -235,9 +239,11 @@ function fillResume(resume) {
   $("version-detail").hidden = true;
   showTab("resume");
   renderResumes();
+  aiProjects.reset(resume?.id || null);
 }
 
 function resetProject() {
+  state.aiCandidate = null;
   state.project = null;
   state.projectEditing = false;
   state.source = null;
@@ -379,6 +385,7 @@ async function loadProjects() {
   state.projectTotal = data.total;
   $("project-count").textContent = `(${data.total})`;
   renderProjects();
+  await aiProjects.loadDrafts(state.resume.id);
 }
 
 function renderProjects() {
@@ -435,6 +442,7 @@ function addFact(fact = { fact_type: "职责", content: "", evidence_quote: "" }
 }
 
 function fillProject(project, source) {
+  state.aiCandidate = null;
   state.project = project;
   state.projectEditing = true;
   state.source = source;
@@ -471,11 +479,17 @@ async function saveProject() {
     return;
   }
   const project = state.project;
-  if (project) payload.expected_revision = project.revision;
+  const candidate = state.aiCandidate;
+  if (candidate) {
+    if (!payload.user_verified) { notify("请核对项目与事实，并勾选「我已核对」后确认保存。", true); return; }
+    payload.candidate_index = candidate.index;
+    payload.expected_revision = candidate.revision;
+  } else if (project) payload.expected_revision = project.revision;
   else payload.source_version = state.source.version;
   const path = `${base}/${state.resume.id}/projects`;
-  const result = await request(project ? `${path}/${project.id}` : path,
-    jsonOptions(project ? "PUT" : "POST", payload, project ? null : creationKey("project", payload)));
+  const target = candidate ? `${base}/${state.resume.id}/parse-drafts/${candidate.draftId}/confirm` : project ? `${path}/${project.id}` : path;
+  const result = await request(target,
+    jsonOptions(project ? "PUT" : "POST", payload, project || candidate ? null : creationKey("project", payload)));
   fillProject(result, state.source);
   delete state.creation.project;
   notify("项目与事实已保存。");
@@ -549,7 +563,18 @@ on("add-fact", "click", () => {
   addFact();
   $("project-verified").checked = false;
 });
-on("reload-project", "click", () => state.project && selectProject(state.project.id));
+on("reload-project", "click", async () => {
+  if (state.aiCandidate) {
+    const draft = await request(`${base}/${state.resume.id}/parse-drafts/${state.aiCandidate.draftId}`);
+    if (draft.confirmed_projects[String(state.aiCandidate.index)]) {
+      notify("该候选已保存，请先复制需要的修改，再在项目列表打开已有项目编辑。", true);
+      return;
+    }
+    state.aiCandidate.revision = draft.revision;
+    $("project-conflict").hidden = true;
+    notify("提取状态已同步，当前输入保留，可以重新确认保存。");
+  } else if (state.project) await selectProject(state.project.id);
+});
 on("delete-project", "click", async () => {
   if (!state.project || !window.confirm("删除这个项目？已保存的事实与来源记录将保留。")) return;
   await request(`${base}/${state.resume.id}/projects/${state.project.id}?expected_revision=${state.project.revision}`, { method: "DELETE" });
@@ -582,6 +607,26 @@ for (const id of ["resume-form", "project-form"]) {
 }
 window.addEventListener("beforeunload", (event) => {
   if (state.busy || resumeDirty() || projectDirty()) { event.preventDefault(); event.returnValue = ""; }
+});
+
+const aiProjects = setupAiProjects({
+  request, run: operate, getResume: () => state.resume, isResumeDirty: resumeDirty, notify,
+  onLoadCandidate: async (draft, index) => {
+    if (!canLeave(true)) return;
+    const source = await request(`${base}/${state.resume.id}/versions/${draft.source_version}`);
+    const candidate = draft.result.projects[index];
+    fillProject(null, source);
+    state.aiCandidate = { draftId: draft.id, index, revision: draft.revision };
+    $("project-title").textContent = "核对 AI 提取项目";
+    $("project-name").value = candidate.name;
+    $("project-summary").value = candidate.summary || "";
+    $("project-role").value = candidate.role || "";
+    $("project-duration").value = candidate.duration || "";
+    $("project-stack").value = candidate.tech_stack.join(", ");
+    for (const fact of candidate.facts) addFact(fact);
+    $("project-form").scrollIntoView({ block: "start", behavior: "smooth" });
+    notify("候选已载入编辑区。请对照原文修正，并勾选已核对后确认保存。");
+  },
 });
 
 await operate(loadResumes);

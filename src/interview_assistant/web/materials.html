@@ -52,7 +52,8 @@
               </form>
             </section>
             <section id="panel-projects" role="tabpanel" aria-labelledby="tab-projects" class="material-panel" hidden>
-              <div class="project-toolbar"><div><h3>项目资料 <span id="project-count"></span></h3><p class="material-help">先手工整理；Qwen 自动提取将在后续接入。</p></div><button id="new-project" class="button" type="button">＋ 新建项目</button></div>
+              <section class="ai-projects" aria-labelledby="ai-projects-title"><div class="project-toolbar"><div><h3 id="ai-projects-title">从简历提取项目</h3><p id="ai-model-status" class="material-help">正在读取模型配置…</p></div><button id="ai-extract-projects" class="button primary" type="button">AI 提取项目</button></div><p class="material-help">点击提取会将已保存的简历文字发送到配置的 Qwen 接口。AI 仅整理候选项目与带原文依据的事实，核对确认后才入库。</p><div class="ai-draft-tools"><label for="ai-draft-select">提取记录</label><select id="ai-draft-select" aria-label="选择提取记录"></select><button id="ai-refresh-drafts" class="text-button" type="button">刷新结果</button><button id="ai-draft-previous" class="text-button" type="button">←</button><span id="ai-draft-page"></span><button id="ai-draft-next" class="text-button" type="button">→</button></div><p id="ai-draft-info" class="material-help" role="status"></p><div id="ai-candidates"></div></section>
+              <div class="project-toolbar"><div><h3>项目资料 <span id="project-count"></span></h3><p class="material-help">维护已保存项目，也可直接手工新建。</p></div><button id="new-project" class="button" type="button">＋ 新建项目</button></div>
               <div id="project-list" class="project-list" aria-live="polite"></div>
               <div class="pagination"><button id="project-previous" class="text-button" type="button">← 上一页</button><span id="project-page"></span><button id="project-next" class="text-button" type="button">下一页 →</button></div>
               <p id="project-welcome" class="panel-description">选择一个项目继续编辑，或新建项目整理自己的经历。</p>

@@ -1,4 +1,4 @@
-"""Minimal structured-output contract; no provider SDK or network calls."""
+"""供应商无关的结构化输出契约；具体调用由适配器实现。"""
 
 from collections.abc import Sequence
 from dataclasses import dataclass

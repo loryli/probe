@@ -26,7 +26,29 @@ class Settings(BaseSettings):
     database_probe_timeout_seconds: PositiveFloat = 3.0
     qwen_api_key: SecretStr | None = Field(default=None, repr=False)
     qwen_model: str | None = None
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_timeout_seconds: float = Field(default=120, ge=10, le=300)
+    qwen_max_output_tokens: int = Field(default=8192, ge=1024, le=32768)
+    qwen_enable_thinking: bool | None = False
     ocr_model_dir: Path | None = None
+
+    @field_validator("qwen_base_url")
+    @classmethod
+    def validate_model_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError("qwen_base_url 必须是无凭据、查询参数和片段的 HTTP(S) 接口基础地址")
+        return value.rstrip("/")
+
+    @field_validator("qwen_model")
+    @classmethod
+    def validate_model_name(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or len(value) > 150):
+            raise ValueError("qwen_model 需填写有效模型标识，最多 150 字符")
+        return value.strip() if value else None
 
     @field_validator("database_url")
     @classmethod

@@ -11,10 +11,12 @@ from fastapi.staticfiles import StaticFiles
 
 from interview_assistant import __version__
 from interview_assistant.api.health import router as health_router
+from interview_assistant.ai.router import router as ai_router
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
 from interview_assistant.logging_config import configure_logging
 from interview_assistant.materials.router import material_error_handler
+from interview_assistant.materials.parse_router import router as parse_router
 from interview_assistant.materials.router import router as material_router
 from interview_assistant.materials.service import MaterialError
 from interview_assistant.question_bank.import_router import import_error_handler
@@ -59,6 +61,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(question_router)
     app.include_router(import_router)
     app.include_router(material_router)
+    app.include_router(ai_router)
+    app.include_router(parse_router)
     app.add_exception_handler(QuestionBankError, question_error_handler)
     app.add_exception_handler(ImportProblem, import_error_handler)
     app.add_exception_handler(MaterialError, material_error_handler)

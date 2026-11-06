@@ -22,11 +22,11 @@ dependencies = [
     "pypdfium2>=5.3,<6",
     "rapidocr>=3.10,<4",
     "onnxruntime>=1.24.1,<2",
+    "httpx2>=2.16,<3",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "httpx2>=2.16,<3",
     "pytest>=8.3,<9",
     "ruff>=0.12,<1",
     "mypy>=1.17,<2",
