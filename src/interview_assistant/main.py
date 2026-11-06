@@ -14,6 +14,9 @@ from interview_assistant.api.health import router as health_router
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
 from interview_assistant.logging_config import configure_logging
+from interview_assistant.materials.router import material_error_handler
+from interview_assistant.materials.router import router as material_router
+from interview_assistant.materials.service import MaterialError
 from interview_assistant.question_bank.import_router import import_error_handler
 from interview_assistant.question_bank.import_router import router as import_router
 from interview_assistant.question_bank.imports import ImportProblem
@@ -46,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Personal AI Interview Assistant",
-        description="个人 AI 面试助手 API：个人题库、内容历史及健康检查。",
+        description="个人 AI 面试助手 API：个人题库、笔记导入、PDF 简历、项目事实与内容历史。",
         version=__version__,
         lifespan=lifespan,
     )
@@ -55,13 +58,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(question_router)
     app.include_router(import_router)
+    app.include_router(material_router)
     app.add_exception_handler(QuestionBankError, question_error_handler)
     app.add_exception_handler(ImportProblem, import_error_handler)
+    app.add_exception_handler(MaterialError, material_error_handler)
     web_directory = Path(__file__).with_name("web")
     app.mount("/assets", StaticFiles(directory=web_directory), name="assets")
 
     @app.get("/", response_class=FileResponse, include_in_schema=False)
     async def workspace() -> FileResponse:
         return FileResponse(web_directory / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/materials", response_class=FileResponse, include_in_schema=False)
+    async def materials_workspace() -> FileResponse:
+        return FileResponse(web_directory / "materials.html", headers={"Cache-Control": "no-cache"})
 
     return app

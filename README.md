@@ -2,7 +2,7 @@
 
 个人自用的 AI 面试练习工具，首发面向大模型应用开发 / AI 全栈。根据简历项目与个人题库动态提问，用带来源证据的记录复盘。
 
-目前已实现 **后端基础骨架、个人题库页面与 API**：创建、查询、编辑、启停、逻辑删除及内容历史。页面直接操作后端保存的数据。Markdown 导入、AI 分类、简历解析、Planner、面试和复盘尚未实现。项目设计见 [设计文档入口](docs/README.md)。
+目前已实现 **后端基础骨架、个人题库、简历与项目管理页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，以及 PDF 原件保存、文字提取与本地 OCR、简历版本、项目和人工事实维护。页面直接操作后端保存的数据。Qwen 接入、AI 项目提取、Planner、面试和复盘尚未实现。项目设计见 [设计文档入口](docs/README.md)。
 
 ## 当前基础架构
 
@@ -31,6 +31,7 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 默认监听本机 `127.0.0.1:8000`，访问：
 
 - 题库页面：<http://127.0.0.1:8000/>，在浏览器中直接管理题目。
+- 简历与项目：<http://127.0.0.1:8000/materials>，也可从页面导航进入。
 - Apifox 导入地址：<http://127.0.0.1:8000/openapi.json>，操作见下方「使用 Apifox 调试」。
 - 进程存活：`GET /health/live`，成功返回 HTTP 200。
 - 数据库就绪：`GET /health/ready`，本地数据库准备好后返回 HTTP 200；未配置或无法连接所选数据库时返回 HTTP 503。
@@ -50,7 +51,69 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 
 后续按功能同时推进页面和接口：先完成可在页面验证的一条流程，再添加下一项能力。
 
+## 导入 Markdown 笔记
+
+1. 在首页点击「导入 Markdown」，选择 `.md` / `.markdown` 文件。首版支持 UTF-8（含 BOM），单个文件最多 1 MiB、500 个候选段落；其他编码先在编辑器中另存为 UTF-8。
+2. 点击「生成预览」。自动识别优先使用三级标题；没有三级标题时，优先识别 Q/A 标记，否则使用二级标题。也可手动选择三级标题、二级标题或 Q/A 模式。
+3. 核对候选题干、答案、来源行号与提示；可按建议勾选、全选、全不选或逐题选择。题干为空不能导入；缺少答案不会自动补写。说明性段落、空答案和文件内完全重复的条目默认不选中，可人工核对后选择。
+4. 点击「确认导入」，选中题目、第一份内容版本和来源引用在一个事务中保存；任一写入失败均回滚。预览阶段只保存导入草稿，不创建题目，关闭预览也不会确认入库。
+5. 在题库选中导入题目，通过「来源原文」查看对应段落或下载完整来源文件。之后编辑题目不改变导入时的来源记录。
+
+识别规则：标题作为题干，保留编号与 Markdown 转义；标题下存在「面试题：」等明确标记时提取该题干。答案保留标准回答标记、代码块、补充说明、Markdown 图片标记及原有换行。代码围栏和缩进代码中的标题、Q/A 标记不作为拆分点；同级或上级标题结束当前段落。前言、分类标题等未入题库的内容仍在完整来源文件中。图片只保留标记，不读取图片、执行 HTML 或调用模型。规则是确定性的文本提取，不是通用 Markdown 语义解析；自动结果不合适时先切换识别方式核对。
+
+导入草稿、源文件全文、SHA-256、解析器版本与来源行号存入所选数据库，不在源码目录另存上传文件。同一内容、同一识别方式与同一解析器版本复用同一批次，文件改名仍沿用首次记录的文件名。每个批次只确认一次，请确认前核对选择；同样选择可安全重试，改选后重复确认返回 HTTP 409。已删除的导入题目不会因重试而恢复。文件或识别方式变化形成新批次，不做跨批次或语义去重。
+
+网络异常导致确认结果未知时，页面保留并锁定本次选择，可点击「重试确认」；重新打开页面后也可选择原文件、使用相同识别方式重新预览，以读取批次状态。
+
+## 简历与项目管理
+
+已有环境需先安装新增的 PDF 依赖，然后按原方式启动或重启服务：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -c constraints.txt -e .
+.\.venv\Scripts\python.exe -m uvicorn interview_assistant.main:create_app --factory --reload
+```
+
+本轮未执行依赖安装、数据库迁移、模型下载或任何测试/浏览器验证。PDF/OCR 依赖已记录在依赖文件，但未在本地验证。local SQLite 会在你下次启动服务时自动升级至 `0004_pdf_ocr`；显式 MySQL 仍需手工运行 Alembic 迁移。
+
+1. 打开 <http://127.0.0.1:8000/materials> 或点击「简历与项目」，选择「新建简历」。
+2. 上传 PDF，核对提取文字，填写名称后保存。PDF 最多 10 MiB、50 页；提取文字最多 1 MiB。也可载入 UTF-8 Markdown/TXT，或直接粘贴文字。
+3. 默认「自动」模式先提取文字，对有效文字不足 20 个字母/数字/汉字的页面进行本地 OCR；混合 PDF 按页处理，不重复拼接原有页眉。可选「整份 PDF 使用 OCR」处理提取错乱或文字较多但仍有扫描内容的文件，或选「仅提取已有文字」关闭 OCR。加密 PDF 仍需先导出未加密副本。OCR 可能出现错字、数字或顺序错误，请人工核对。[文字提取限制见 pypdf 官方说明](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)。
+4. 上传 PDF 时先保存原件和提取结果，点击「保存简历」才创建简历或新版本。相同 PDF 字节复用同一份原件，并沿用首次文件名；关闭页面不删除上传原件。原始字节不被 OCR 或人工修正改写。已有 PDF 可更改识别方式后点击「重新识别当前 PDF」，核对结果后再保存；未保存前不会更新简历，也不改变已有项目依据。
+5. 保存简历后，在「项目与事实」新建项目，维护名称、职责、时间、技术栈、说明和事实。每条事实可记录类型、内容与可选原文引用；引用必须匹配该项目所绑定简历版本中的连续文字。复制导致的换行差异可匹配，入库仍保留来源中的原始换行。无引用的条目明确标为「手工补充」。
+6. 可勾选「我已核对」；继续编辑项目会取消该勾选，保存前可重新确认。本轮没有 Qwen 调用，也不自动生成项目事实。OCR 只用于 PDF 文字识别，Markdown 题库中的图片仍不识别。
+7. 简历名称、文字或来源变化时原子保存新版本；启停只更新修改版本。历史页可读取旧文字及对应 PDF。项目固定绑定创建时的简历版本，更新简历不会悄悄重绑来源；如需基于新版重新整理，可创建新项目。
+
+OCR 输出根据文本框坐标合并同一视觉行，按标题、条目和长句整理分段，不再把每个文本框直接作为独立段落。对「姓／名：」等有冒号佐证的已知字段修复断行，不修改词句、数字或推测缺失内容。已载入或粘贴的文字也可点击「整理换行」，结果只进入当前草稿，可立即「撤销整理」；手工继续编辑或保存后清除该次撤销入口。复杂多栏、旋转文字和识别杂字符仍需人工核对。
+
+本次升级了提取结果缓存版本，旧 PDF 点击「重新识别当前 PDF」会使用新的排版规则，不复用旧格式结果；已保存的简历与项目依据不会自动修改。未运行识别或页面验证。
+
+简历、项目支持逻辑删除和并发修改保护。删除简历后关联项目从普通接口与页面隐藏，版本、PDF 和项目事实保留；编辑事实时旧事实记录保留，不覆盖来源文字。本阶段提供简历历史页面，不提供项目编辑历史页面。未保存输入在切换资料或离开页面时提醒，失败时保留输入。创建重试沿用同一个 UUID `Idempotency-Key`。
+
+OCR 使用 [RapidOCR 与 ONNX Runtime](https://rapidai.github.io/RapidOCRDocs/main/quickstart/) 在本机执行，由 [pypdfium2](https://pypdfium2.readthedocs.io/en/stable/python_api.html) 将 PDF 页面渲染为图像。首次实际识别会下载检测、方向分类和识别模型，后续复用本地文件；简历文字与页面图像不上传。默认模型目录为所配置 `data/` 下的 `ocr-models/`，可通过 `INTERVIEW_OCR_MODEL_DIR` 指定可写目录。模型无法下载时页面给出提示，可联网重试、预先准备模型目录或手工补充文字。应用启动本身不加载 OCR、不下载模型。
+
+识别结果按 PDF 原件、识别方式和提取版本缓存，记录 OCR 页码、逐页处理方式与核对提示；已有简历版本不会被重新识别覆盖。自动模式遇到 OCR 错误时返回可用的提取文字及提示，且不缓存失败结果；整份 OCR 模式失败则返回错误并保留当前编辑输入。首次识别可能较慢，页面单次等待最多 5 分钟；超时可稍后重试。PDFium 渲染和 OCR 引擎调用在进程内串行处理，识别期间不持有数据库事务。
+
+资料接口统一在 `/materials` 下：
+
+| 路径 | 行为 |
+|---|---|
+| `POST /materials/documents/pdf?file_name=...&ocr_mode=auto` | binary PDF 上传，保存原件并返回文字、OCR 页码和提示；识别方式支持 `auto/force/off`。 |
+| `POST /materials/documents/{id}/extract?ocr_mode=force` | 使用已保存原件重新识别或读取对应方式缓存，返回预览，不修改简历。 |
+| `POST /materials/text/format` | JSON 提交 `source_text`，返回只整理断行和空白的文本，不写数据库、不调用模型。 |
+| `GET /materials/documents/{id}/file` | 下载原始 PDF。 |
+| `GET/POST /materials/resumes` | 按名称搜索、分页列出或创建简历。 |
+| `GET/PUT/DELETE /materials/resumes/{id}` | 读取、保存完整内容或逻辑删除。 |
+| `GET /materials/resumes/{id}/versions` | 分页列出简历版本。 |
+| `GET /materials/resumes/{id}/versions/{version}` | 读取指定版本文字、来源文件和哈希。 |
+| `GET/POST /materials/resumes/{id}/projects` | 分页列出或创建项目及事实。 |
+| `GET/PUT/DELETE /materials/resumes/{id}/projects/{project_id}` | 读取、保存项目与事实完整内容或逻辑删除。 |
+
+资料的 `PUT` 接口提交完整可编辑内容和 `expected_revision`；项目来源版本创建后不可改写，事实随项目在同一事务中保存。`POST` 创建可带 UUID `Idempotency-Key`，同一标识与内容重复请求返回已有记录（HTTP 200）；不同内容或已删除记录返回 409。删除通过查询参数提交 `expected_revision`。详细结构以 OpenAPI 为准。
+
 ## 使用 Apifox 调试
+
+简历与项目 API 也包含在同一份 OpenAPI 定义中，更新导入即可查看。PDF 上传接口 `POST /materials/documents/pdf?file_name=简历.pdf` 使用 **binary 请求体**，Content-Type 为 `application/pdf`，不使用 multipart，也不填写本机路径。
 
 日常接口查看与调试使用 Apifox。先启动本地后端，再按以下步骤操作：
 
@@ -94,7 +157,7 @@ INTERVIEW_DATABASE_URL=mysql+aiomysql://interview:password@127.0.0.1:3306/interv
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-迁移创建 `question`、`question_version` 和 `question_metadata` 三张表。MySQL 不在应用启动时自动建库、建表或运行迁移。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
+迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，以及资料管理的 `resume_document`、`resume_extraction`、`resume`、`resume_version`、`project`、`project_fact`。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
 
 `.env`、虚拟环境与 `data/` 不进入版本控制。请勿将简历、题库、数据库凭据或模型密钥加入源码仓库。
 
@@ -114,14 +177,15 @@ src/interview_assistant/
     sse.py            SSE 编码和响应工具
   ai/
     protocol.py       与供应商无关的结构化输出协议
-  question_bank/      题库模型、请求/响应结构、事务服务与 API
-  web/                题库页面、样式与浏览器交互，同源调用现有 API
+  question_bank/      题库模型、Markdown 提取与导入事务、请求/响应结构及 API
+  materials/          PDF 原件、文字提取/本地 OCR、简历版本、项目事实与 API
+  web/                题库、导入预览、简历与项目页面，同源调用现有 API
 migrations/           Alembic 迁移环境和版本脚本
 data/                 本地 SQLite 数据，已忽略版本控制
 tests/                使用临时文件数据库的离线检查
 ```
 
-后续逐步加入 Markdown 导入、简历、Planner、面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成题库闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
+后续逐步加入 Qwen 与 AI 资料提取、题库元数据、Planner、面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
 
 ## 题库 API
 
@@ -152,7 +216,21 @@ tests/                使用临时文件数据库的离线检查
 
 创建请求可携带 `Idempotency-Key`（1–128 个英文字母、数字或 `_.:-`）。同一标识和同一请求只创建一次，重试返回 HTTP 200 和该题当前状态；标识用于不同内容或对应题目已删除时返回 HTTP 409。未提供标识的创建请求独立处理。元数据绑定具体内容版本，本阶段不提供 AI 元数据写入接口。
 
+Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
+
+| 方法/路径 | 行为 |
+|---|---|
+| `POST /question-bank/imports` | JSON 提交 `file_name`、原文 `content` 和可选 `strategy`，创建预览草稿（201）或复用已有批次（200）。 |
+| `GET /question-bank/imports/{id}` | 读取候选题、提示与批次确认状态。 |
+| `POST /question-bank/imports/{id}/confirm` | 提交 `selected_indices` 数组，以预览中的 `candidates.index` 为准；整批保存或安全重放。 |
+| `GET /question-bank/imports/{id}/document` | 下载 UTF-8 来源文件，保留 BOM 与换行。 |
+| `GET /question-bank/questions/{id}/source` | 读取来源文件信息、行号与原始段落；手工题或已删除题返回 404。 |
+
+预览 API 使用 JSON 文本而非 multipart；客户端不提交本机文件路径。确认 API 仅接收候选序号，题干、答案与来源均从服务器保存的草稿读取。
+
 ## 检查命令
+
+按用户约定，日常开发默认不由助手主动运行测试、静态检查或浏览器验证，由用户启动服务后体验；以下命令仅供需要时手工执行。此次简历与项目功能及新增 PDF 依赖尚未运行验证。
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff format --check .
@@ -161,7 +239,7 @@ tests/                使用临时文件数据库的离线检查
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-测试覆盖基础设施、页面与静态资源路由、SQLite 启动初始化、原文保真、重启后持久化、编辑冲突、失败回滚、元数据隔离和迁移升降级。使用临时 SQLite 文件运行实际迁移与接口，并阻止 MySQL 驱动连接；另检查 MySQL SQL 生成。测试不调用 Qwen，MySQL 联调仍需在独立开发数据库中进行。CI 配置不代表已在远端运行。页面交互需另用浏览器验证，Python 测试不代替浏览器检查。
+测试覆盖基础设施、页面与静态资源路由、SQLite 启动初始化、原文保真、重启后持久化、编辑冲突、Markdown 拆分与来源、选择导入、并发确认、失败回滚、元数据隔离和迁移升降级。使用临时 SQLite 文件运行实际迁移与接口，并阻止 MySQL 驱动连接；另检查 MySQL SQL 生成与旧版数据升级。测试不调用 Qwen，MySQL 联调仍需在独立开发数据库中进行。CI 配置不代表已在远端运行。页面交互需另用浏览器验证，Python 测试不代替浏览器检查。
 
 ## 后续讨论已确认的补充
 
@@ -173,4 +251,4 @@ tests/                使用临时文件数据库的离线检查
 - 题库主要来自 Markdown Q-A 笔记；图片暂不识别，AI 不补写题干或标准答案。
 - 模型优先 Qwen 系列，具体型号与接入参数后续确定。
 
-Markdown 的详细切分与预览规则仍为讨论中的方案，未在当前骨架中实现。设计稿中“时长是硬边界”“时间到结束”的旧表述后续需按上述确认同步。
+Markdown 首版切分与预览行为见上文；更复杂的笔记格式后续按实际文件补充。设计稿中“时长是硬边界”“时间到结束”的旧表述后续需按上述确认同步。

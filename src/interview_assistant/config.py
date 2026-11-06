@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     database_probe_timeout_seconds: PositiveFloat = 3.0
     qwen_api_key: SecretStr | None = Field(default=None, repr=False)
     qwen_model: str | None = None
+    ocr_model_dir: Path | None = None
 
     @field_validator("database_url")
     @classmethod

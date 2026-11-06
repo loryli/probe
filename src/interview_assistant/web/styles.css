@@ -1712,3 +1712,9 @@ h1 {
     scroll-behavior: auto!important;
   }
 }
+
+@media(max-width:800px) {
+  .sidebar { flex-wrap: wrap; gap: 12px; }
+  .sidebar nav { display: flex; flex-wrap: wrap; }
+  .sidebar .nav-item { font-size: 12px; padding: 8px 9px; }
+}

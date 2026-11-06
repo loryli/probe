@@ -129,12 +129,19 @@ def parse_markdown(content: str, strategy: ImportStrategy = "auto") -> ParsedMar
         starts = [i for i, line in enumerate(lines) if line.visible and QUESTION.match(line.text)]
         if len(starts) > MAX_CANDIDATES:
             raise MarkdownLimitError("单次最多识别 500 道候选题，请将文件拆小后重试。")
+        heading_position = 0
+        qa_parents: dict[int, str] = {}
         for position, start in enumerate(starts):
             stop = starts[position + 1] if position + 1 < len(starts) else len(lines)
             # Category headings delimit the preceding answer, even without a next Q.
             stop = next((i for i, _ in headings if start < i < stop), stop)
-            path = [match[2] for i, match in headings if i < start]
-            ranges.append((start, stop, "", path[-2:]))
+            while heading_position < len(headings) and headings[heading_position][0] < start:
+                parent = headings[heading_position][1]
+                parent_level = len(parent[1])
+                qa_parents = {key: value for key, value in qa_parents.items() if key < parent_level}
+                qa_parents[parent_level] = parent[2]
+                heading_position += 1
+            ranges.append((start, stop, "", list(qa_parents.values())))
     if len(ranges) > MAX_CANDIDATES:
         raise MarkdownLimitError("单次最多识别 500 道候选题，请将文件拆小后重试。")
     candidates: list[Candidate] = []
@@ -193,7 +200,10 @@ def parse_markdown(content: str, strategy: ImportStrategy = "auto") -> ParsedMar
                 recommended=recommended,
             )
         )
-    warnings = ["预览只保存导入草稿；勾选并确认后才创建题目。"]
+    warnings = [
+        "预览只保存导入草稿；勾选并确认后才创建题目。",
+        "同一批次仅确认一次，请核对所选题目后入库。",
+    ]
     if unclosed_fence:
         warnings.append("文件有未闭合的代码围栏，其后的内容未按标题拆分，请核对原文。")
     if not candidates:

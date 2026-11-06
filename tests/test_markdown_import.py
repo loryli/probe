@@ -224,6 +224,8 @@ def test_code_and_blank_answer_whitespace_stay_in_source_without_becoming_questi
     assert len(parse_markdown(document).candidates) == 1
     blank = parse_markdown("### 空答案？\r\n\r\n").candidates[0]
     assert blank.standard_answer_text == "\r\n" and not blank.recommended
+    categories = parse_markdown("# 全书\n## 分类一\nQ: 甲？\nA: 甲\n## 分类二\nQ: 乙？\nA: 乙\n")
+    assert categories.candidates[1].heading_path == ["全书", "分类二"]
 
 
 def test_upgrade_keeps_existing_questions_and_versions(tmp_path):

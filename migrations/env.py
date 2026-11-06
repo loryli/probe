@@ -8,10 +8,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
-from interview_assistant.question_bank.models import Question
+from interview_assistant.materials.models import Resume
+from interview_assistant.question_bank.models import Question  # noqa: F401 — 注册题库表
 
 config = context.config
-target_metadata = Question.metadata
+target_metadata = Resume.metadata
 
 
 def run_migrations(connection: Connection) -> None:

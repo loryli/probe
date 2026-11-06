@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>简历与项目 · 练习场</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/materials.css">
+  <script src="/assets/materials.js" type="module"></script>
+</head>
+<body class="materials-page">
+  <a class="skip-link" href="#main">跳到主内容</a>
+  <aside class="sidebar" aria-label="工作区导航">
+    <a class="brand" href="/"><img src="/assets/favicon.svg" width="38" height="38" alt=""><span>练习场<small>INTERVIEW WORKSPACE</small></span></a>
+    <div class="workspace-label">个人工作区 <span>V1</span></div>
+    <nav><a class="nav-item" href="/"><span aria-hidden="true">▤</span>个人题库</a><a class="nav-item selected" href="/materials" aria-current="page"><span aria-hidden="true">▧</span>简历与项目</a></nav>
+    <section class="journey" aria-labelledby="journey-title"><h2 id="journey-title">你的准备路径</h2><ol>
+      <li><span>01</span><div>整理题库<small>积累自己的问题与答案</small></div></li>
+      <li class="current"><span>02</span><div>准备项目<small>从经历中找到具体证据</small></div></li>
+      <li><span>03</span><div>模拟面试<small>动态提问与复盘 · 后续开放</small></div></li>
+    </ol></section>
+    <div class="sidebar-note"><span class="note-mark" aria-hidden="true">✳</span><p>讲清做过什么，<br>也讲清为什么。</p><small>用真实经历支撑每一个回答。</small></div>
+    <div class="sidebar-footer"><span class="avatar" aria-hidden="true">我</span><div>个人面试助手<small>大模型应用开发 / AI 全栈</small></div></div>
+  </aside>
+  <main id="main">
+    <header class="topbar"><span>个人工作区 <span class="slash">/</span> 面试准备</span><span class="connection" id="connection" role="status">正在读取资料</span></header>
+    <div class="page">
+      <section class="page-heading"><div><div class="eyebrow">BUILD ON YOUR EXPERIENCE</div><h1>简历与项目<span class="title-dot">.</span></h1><p>留下真实经历，整理能讲清楚的项目事实。</p></div><button class="button primary" id="new-resume" type="button">＋ 新建简历</button></section>
+      <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" type="button" aria-label="关闭提示">×</button></div>
+      <section class="bank" aria-label="简历与项目管理">
+        <div class="question-column">
+          <div class="list-heading"><h2>我的简历 <span id="resume-count">—</span></h2><button class="text-button" id="refresh-resumes" type="button">刷新</button></div>
+          <form id="resume-search-form" class="search-form" role="search"><label class="sr-only" for="resume-search">搜索简历名称</label><input id="resume-search" type="search" maxlength="200" placeholder="搜索简历名称…"><button type="submit" aria-label="搜索">↵</button></form>
+          <div id="resume-list" class="question-list" aria-live="polite"><p class="list-placeholder">正在读取简历…</p></div>
+          <div class="pagination"><button class="text-button" id="resume-previous" type="button" disabled>← 上一页</button><span id="resume-page">第 1 页</span><button class="text-button" id="resume-next" type="button" disabled>下一页 →</button></div>
+        </div>
+        <div class="editor-column">
+          <section class="welcome" id="materials-welcome"><span class="eyebrow">YOUR EXPERIENCE, YOUR EVIDENCE</span><h2>先放入你的简历</h2><p>上传 PDF，核对提取文字，<br>再整理项目、职责与成果。</p><button class="button primary" id="welcome-new" type="button">＋ 新建第一份简历</button><small>支持本地 OCR 识别扫描简历，原始 PDF 单独保留。</small></section>
+          <section id="materials-workspace" hidden aria-labelledby="workspace-title">
+            <div class="editor-heading"><div><div class="eyebrow">RESUME &amp; PROJECTS</div><h2 id="workspace-title">新建简历</h2></div><span class="save-state" id="save-state">未保存</span></div>
+            <div class="editor-tabs" role="tablist" aria-label="资料内容"><button id="tab-resume" role="tab" aria-selected="true" aria-controls="panel-resume" type="button">简历文字</button><button id="tab-projects" role="tab" aria-selected="false" aria-controls="panel-projects" type="button" disabled>项目与事实</button><button id="tab-history" role="tab" aria-selected="false" aria-controls="panel-history" type="button" disabled>历史版本</button></div>
+            <section id="panel-resume" role="tabpanel" aria-labelledby="tab-resume">
+              <form id="resume-form" class="material-form">
+                <div class="field"><label for="resume-name">简历名称 <span class="required">*</span></label><input id="resume-name" maxlength="200" placeholder="例如：AI 全栈开发 · 当前简历" required></div>
+                <div class="upload-box"><div class="ocr-options"><label for="pdf-ocr-mode">PDF 识别方式<select id="pdf-ocr-mode"><option value="auto">自动：文字不足页使用 OCR</option><option value="force">整份 PDF 使用 OCR</option><option value="off">仅提取已有文字</option></select></label><button id="reextract-pdf" class="button" type="button" hidden>重新识别当前 PDF</button></div><label for="resume-file">上传 PDF 简历，也可载入 Markdown / TXT<input id="resume-file" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/plain,text/markdown"></label><p>PDF 最多 10 MiB、50 页；文字文件需 UTF-8，最多 1 MiB。首次 OCR 需要下载模型，之后在本机识别，不上传简历。识别后核对文字，再点击保存。</p><div class="source-links"><span id="resume-file-info">手工录入</span><a id="resume-pdf" class="text-button" hidden>下载原始 PDF ↗</a></div><p id="extraction-warnings" role="status" hidden></p></div>
+                <div class="field"><label for="resume-text">简历文字 <span class="required">*</span></label><div class="text-layout-tools"><span>保留你的内容，整理阅读顺序与换行。</span><button id="format-resume-text" class="text-button" type="button">整理换行</button><button id="undo-text-format" class="text-button" type="button" hidden>撤销整理</button></div><textarea id="resume-text" rows="18" required placeholder="上传 PDF 提取文字或进行 OCR，也可在这里粘贴简历。"></textarea><p class="material-help">排版整理仅调整空白和分段，不补写缺失内容。OCR 错字与杂字符请对照原件修正，保存后保留历史版本。</p></div>
+                <div class="activation"><div><label for="resume-active">可用于后续面试</label><p>停用后保留资料和历史记录。</p></div><label class="switch"><input id="resume-active" type="checkbox" checked aria-label="可用于后续面试"><span></span></label></div>
+                <div class="conflict-actions" id="resume-conflict" hidden><p>当前输入已保留，请先复制需要的内容，再读取最新版本。</p><button class="button" id="reload-resume" type="button">读取最新简历</button></div>
+                <footer class="editor-actions"><button class="text-button danger" id="delete-resume" type="button" hidden>删除简历</button><span class="original-note">修改资料保留历史版本。</span><button class="button primary" id="save-resume" type="submit">保存简历 ↗</button></footer>
+              </form>
+            </section>
+            <section id="panel-projects" role="tabpanel" aria-labelledby="tab-projects" class="material-panel" hidden>
+              <div class="project-toolbar"><div><h3>项目资料 <span id="project-count"></span></h3><p class="material-help">先手工整理；Qwen 自动提取将在后续接入。</p></div><button id="new-project" class="button" type="button">＋ 新建项目</button></div>
+              <div id="project-list" class="project-list" aria-live="polite"></div>
+              <div class="pagination"><button id="project-previous" class="text-button" type="button">← 上一页</button><span id="project-page"></span><button id="project-next" class="text-button" type="button">下一页 →</button></div>
+              <p id="project-welcome" class="panel-description">选择一个项目继续编辑，或新建项目整理自己的经历。</p>
+              <form id="project-form" hidden>
+                <div class="project-toolbar"><h3 id="project-title">新建项目</h3><span class="save-state" id="project-save-state"></span></div>
+                <div class="source-box"><p id="project-source-label"></p><details><summary>查看项目依据的简历文字（可复制原文作为事实引用）</summary><pre id="project-source-text"></pre><a id="project-source-pdf" class="text-button" hidden>下载该版本 PDF ↗</a></details></div>
+                <div class="field"><label for="project-name">项目名称 <span class="required">*</span></label><input id="project-name" maxlength="200" required></div>
+                <div class="material-row"><div class="field"><label for="project-role">你的职责 / 角色</label><input id="project-role" maxlength="500" placeholder="例如：后端开发，负责检索链路"></div><div class="field"><label for="project-duration">项目时间</label><input id="project-duration" maxlength="100" placeholder="例如：2025.03–2025.08"></div></div>
+                <div class="field"><label for="project-stack">技术栈</label><input id="project-stack" placeholder="用逗号分隔，例如：Python, FastAPI, Qwen"><p class="material-help">仅整理标签，不改写简历文字。</p></div>
+                <div class="field"><label for="project-summary">项目说明</label><textarea id="project-summary" rows="4" maxlength="50000" placeholder="项目背景、主要功能和你的工作范围…"></textarea></div>
+                <div class="project-toolbar"><h3>项目事实</h3><button id="add-fact" class="text-button" type="button">＋ 添加事实</button></div>
+                <p class="material-help">分别记录职责、架构决策、规模、指标、故障、权衡或结果。没有原文引用的条目标记为「手工补充」。</p>
+                <div id="fact-list"></div>
+                <label class="verified-label"><input id="project-verified" type="checkbox"> 我已核对项目说明与事实内容</label>
+                <div class="conflict-actions" id="project-conflict" hidden><p>当前输入已保留，请先复制，再读取最新项目。</p><button class="button" id="reload-project" type="button">读取最新项目</button></div>
+                <footer class="editor-actions"><button id="delete-project" class="text-button danger" type="button" hidden>删除项目</button><button id="save-project" class="button primary" type="submit">保存项目 ↗</button></footer>
+              </form>
+            </section>
+            <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" class="material-panel" hidden>
+              <p class="panel-description">名称、文字或来源变化都会保存新版本；启停不产生内容版本。项目始终引用创建时选定的简历版本。</p>
+              <div id="version-list" class="history-list"></div>
+              <div class="pagination"><button id="version-previous" class="text-button" type="button">← 上一页</button><span id="version-page"></span><button id="version-next" class="text-button" type="button">下一页 →</button></div>
+              <article id="version-detail" class="version-detail" hidden><h3 id="version-title"></h3><a id="version-pdf" class="text-button" hidden>下载该版原始 PDF ↗</a><pre id="version-text"></pre></article>
+            </section>
+          </section>
+        </div>
+      </section>
+      <footer class="page-footer"><span>每一段经历，都有来处。</span><span>简历版本 · 项目事实 · 来源证据</span></footer>
+    </div>
+  </main>
+  <noscript>请启用 JavaScript，以管理简历与项目资料。</noscript>
+</body>
+</html>
