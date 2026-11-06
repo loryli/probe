@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-interview-assistant"
+version = "0.1.0"
+description = "Personal AI interview assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "SQLAlchemy[asyncio]>=2.0.36,<2.1",
+    "aiomysql>=0.2,<1",
+    "PyMySQL[rsa]>=1.1,<2",
+    "alembic>=1.15,<2",
+    "aiosqlite>=0.20,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx2>=2.16,<3",
+    "pytest>=8.3,<9",
+    "ruff>=0.12,<1",
+    "mypy>=1.17,<2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+interview_assistant = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+cache_dir = ".cache/pytest"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+cache-dir = ".cache/ruff"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/interview_assistant"]
+strict = true
+cache_dir = ".cache/mypy"
+
