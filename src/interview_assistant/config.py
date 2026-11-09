@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     qwen_timeout_seconds: float = Field(default=120, ge=10, le=300)
     qwen_max_output_tokens: int = Field(default=8192, ge=1024, le=32768)
     qwen_enable_thinking: bool | None = False
+    # 只用于面试的判定与提问；资料抽取仍用供应商默认值，避免同一份资料抽出不同结果。
+    qwen_interview_temperature: float = Field(default=0.8, ge=0.0, le=1.5)
     ocr_model_dir: Path | None = None
 
     @field_validator("qwen_base_url")

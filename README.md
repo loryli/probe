@@ -2,7 +2,7 @@
 
 个人自用的 AI 面试练习工具，首发面向大模型应用开发 / AI 全栈。根据简历项目与个人题库动态提问，用带来源证据的记录复盘。
 
-目前已实现 **后端基础骨架、个人题库、简历与项目、面试计划（Planner）页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存，以及固定资料版本的考察目标、题源与时间预算规划和人工确认。页面直接操作后端保存的数据。文字面试运行时、实时事件、复盘与记忆尚未实现。项目设计见 [设计文档入口](docs/README.md)。
+目前已实现 **后端基础骨架、个人题库、简历与项目、面试计划（Planner）与文字模拟面试的页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存，固定资料版本的考察目标与预算规划，以及按已确认计划逐轮提问、保存回答的文字面试最小闭环。页面直接操作后端保存的数据。实时事件、逐轮分析与复盘、记忆尚未实现。项目设计见 [设计文档入口](docs/README.md)。
 
 ## 当前基础架构
 
@@ -33,8 +33,9 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 - 题库页面：<http://127.0.0.1:8000/>，在浏览器中直接管理题目。
 - 简历与项目：<http://127.0.0.1:8000/materials>，也可从页面导航进入。
 - 面试计划：<http://127.0.0.1:8000/planner>，配置资料版本并生成、确认计划。
+- 模拟面试：<http://127.0.0.1:8000/interview>，按已确认计划开始文字面试并回看记录。
 
-三个页面的新建操作统一由页面右上角主按钮触发；空状态区域只保留引导文案，不重复放置按钮。
+四个页面的新建操作统一由页面右上角主按钮触发；空状态区域只保留引导文案，不重复放置按钮。
 - Apifox 导入地址：<http://127.0.0.1:8000/openapi.json>，操作见下方「使用 Apifox 调试」。
 - 进程存活：`GET /health/live`，成功返回 HTTP 200。
 - 数据库就绪：`GET /health/ready`，本地数据库准备好后返回 HTTP 200；未配置或无法连接所选数据库时返回 HTTP 503。
@@ -45,7 +46,7 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 
 - 点击「新建题目」，填写题干、自己的标准答案和复习笔记后保存；答案与笔记可留空。
 - 左侧按题干搜索、按启用状态筛选并分页；选中一道题即可编辑。支持 `Ctrl+Enter` / `⌘+Enter` 保存。
-- 「用于面试抽题」开关控制启用状态，点击保存后生效；面试功能尚未开放。
+- 「用于面试抽题」开关控制启用状态，点击保存后生效；面试计划会把启用题目作为候选池。
 - 「历史版本」查看历次内容原文，切换版本不会覆盖当前编辑内容。删除题目需确认，后端保留历史记录。
 - 未保存的内容在切换题目、新建或离开页面时提醒确认；请求失败时保留输入，创建请求重试使用幂等标识。
 - 若 Apifox 或其他页面修改了同一道题，保存时会提示版本冲突并保留草稿，可先复制输入再「读取最新内容」。
@@ -77,7 +78,7 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 .\.venv\Scripts\python.exe -m uvicorn interview_assistant.main:create_app --factory --reload
 ```
 
-本轮未执行依赖安装、数据库迁移、模型下载或任何测试/浏览器验证。PDF/OCR 依赖已记录在依赖文件，但未在本地验证。local SQLite 会在启动服务时自动升级到当前迁移头（现为 `0006_interview_plan`）；显式 MySQL 仍需手工运行 Alembic 迁移。
+本轮未执行依赖安装、数据库迁移、模型下载或任何测试/浏览器验证。PDF/OCR 依赖已记录在依赖文件，但未在本地验证。local SQLite 会在启动服务时自动升级到当前迁移头（见「配置与数据库」）；显式 MySQL 仍需手工运行 Alembic 迁移。
 
 1. 打开 <http://127.0.0.1:8000/materials> 或点击「简历与项目」，选择「新建简历」。
 2. 上传 PDF，核对提取文字，填写名称后保存。PDF 最多 10 MiB、50 页；提取文字最多 1 MiB。也可载入 UTF-8 Markdown/TXT，或直接粘贴文字。
@@ -125,6 +126,7 @@ INTERVIEW_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 INTERVIEW_QWEN_ENABLE_THINKING=false
 INTERVIEW_QWEN_TIMEOUT_SECONDS=120
 INTERVIEW_QWEN_MAX_OUTPUT_TOKENS=8192
+INTERVIEW_QWEN_INTERVIEW_TEMPERATURE=0.8
 ```
 
 `qwen-plus` 是可替换的配置示例，不锁定最终型号。接口使用 Chat Completions 的 JSON Object 模式，并由 Pydantic 校验实际结构；所选模型需支持对应 JSON/思考模式组合。默认接口地址是北京地域现有域名，也可改为百炼控制台的业务空间专属地址；密钥和接口需同地域。[百炼兼容接口说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[结构化输出说明](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。
@@ -151,7 +153,7 @@ INTERVIEW_QWEN_MAX_OUTPUT_TOKENS=8192
 | `GET /materials/resumes/{id}/parse-drafts/{draft_id}` | 读取任务结果、revision 和已确认候选映射。 |
 | `POST /materials/resumes/{id}/parse-drafts/{draft_id}/confirm` | 提交候选序号、`expected_revision`、完整可编辑项目字段和 `user_verified=true`，确认一个项目。 |
 
-首次使用只需按原命令重启服务，local SQLite 自动升级到当前迁移头（现为 `0006_interview_plan`）；显式 MySQL 需手动 `alembic upgrade head`。网络调用复用现有 `httpx2` 包，已将其声明移到运行依赖，不引入供应商 SDK。
+首次使用只需按原命令重启服务，local SQLite 自动升级到当前迁移头（见「配置与数据库」）；显式 MySQL 需手动 `alembic upgrade head`。网络调用复用现有 `httpx2` 包，已将其声明移到运行依赖，不引入供应商 SDK。
 
 ## 面试准备与 Planner
 
@@ -178,7 +180,7 @@ Planner 决定后续提问水平，也影响语音对答的反应速度，因此
 - **结构化运行时契约**：`GET /interview-plans/{id}/runtime` 返回 `interview_runtime.v1`：目标的结构化引用 ID、可观察证据、完成规则、预算、候选范围，以及确认时冻结的完整资料快照（含题干、标准答案与备注原文）。`context` 字段只是摘要，用于选择方向；提问、保存来源与复盘必须按 ID 读取快照原文，不能从截短文本恢复原题。
 - **旧计划只读**：优化前生成的计划（`planner.v1`、快照缺 `revision` / 来源依据）仍可在列表与详情中查看，但确认与运行时接口返回 `plan_contract_outdated` 409，必须按当前配置重新生成；页面同时禁用其确认按钮。当前提示词版本为 `planner_prompt.v3` / `planner_rule.v3`。
 
-计划固定引用所选简历版本，并保存生成时的项目 `revision`、事实内容与来源依据（`source_kind` / `evidence_quote`）、题目内容版本与标准答案原文，作为确认复核与运行时读取的冻结依据。local SQLite 重启后自动升级到 `0006_interview_plan`；显式 MySQL 需手动 `alembic upgrade head`。本轮无新迁移、无新依赖，也未运行迁移、测试、静态检查、浏览器验证或模型试调用。
+计划固定引用所选简历版本，并保存生成时的项目 `revision`、事实内容与来源依据（`source_kind` / `evidence_quote`）、题目内容版本与标准答案原文，作为确认复核与运行时读取的冻结依据。local SQLite 重启后自动升级到当前迁移头；显式 MySQL 需手动 `alembic upgrade head`。本轮无新迁移、无新依赖，也未运行迁移、测试、静态检查、浏览器验证或模型试调用。
 
 新增接口（更新 Apifox 的 `/openapi.json` 导入）：
 
@@ -191,6 +193,39 @@ Planner 决定后续提问水平，也影响语音对答的反应速度，因此
 | `GET /interview-plans/{id}/runtime` | 读取已确认计划的运行时契约 `interview_runtime.v1`：目标结构化引用、候选范围、预算约束与冻结资料快照，供实时/语音链路直接使用；未确认或旧版计划返回 409。 |
 | `POST /interview-plans/{id}/confirm` | 提交 `expected_revision`，复核简历版本哈希、项目 revision、事实内容与题目内容版本后确认保存；不匹配返回 409 `plan_reference_stale`；重复确认幂等。 |
 | `DELETE /interview-plans/{id}?expected_revision=1` | 逻辑删除计划。 |
+
+## 文字模拟面试
+
+打开 <http://127.0.0.1:8000/interview> 或点击侧栏「模拟面试」。本轮交付最小闭环：已确认计划 → 创建场次 → 首问 → 提交回答 → 追问或切题 → 结束，问答逐轮保存，刷新后可继续或回看。
+
+1. 选择一份**已确认的计划**开始。只有满足当前契约（`planner.v2` 结果、`snapshot_version=2` 快照、项目 revision 与题目原文齐全）的计划才能开始；旧版计划仍会列出来但置灰，页面直接提示去「面试计划」页按当前配置重新生成并确认，不会等到点「开始」才报 409。创建场次时把 `interview_runtime.v1`（目标、预算、约束、候选范围与冻结资料快照）复制进场次；之后修改计划或资料不影响进行中的场次与历史记录，绕过页面直接调用时旧契约仍返回 `plan_contract_outdated`。
+2. 创建场次时**一次批量生成基础问题骨架**并冻结到 `outline_json`（`interview_outline.v1`，每个项目目标最多 2 题，只依据该目标的项目事实）；开场与之后切题都优先取骨架，命中即零模型调用。骨架生成失败、密钥未配置或旧场次没有骨架时**自动回退**到即时生成，不阻断开始。题库目标不进骨架，仍直接使用**你自己的原题**（题干经消费层清理后展示，原文仍在冻结快照中）。发送给模型的只有该目标的事实摘要与题库题干，不含简历全文、标准答案或笔记。
+3. 提交回答后：**回答先落库并提交事务，再调用模型**。模型只输出本轮判断（目标是否覆盖）、追问措辞、下一目标建议与一句观察；是否追问、切换目标、跳过与收尾由服务端按计划配额决定，模型建议只作为参考。一次回答最多一次模型调用：判断与措辞同一次返回，追问或下一问在同一事务里立即写入，不会出现"判定要追问却没有下一题"。
+4. 追问受两个上限约束：计划的总追问上限与单目标 `max_followups`；用尽后直接切题，不会因为模型想追问而突破。追问只在回答里有可追问的内容时发生：回答短于 8 字（如"不知道"）时不追问细节，改为换该目标更基础的方面或直接切题。每个项目目标最多 2 个基础问题，用完即结束该目标；题库目标按本场的取题顺序逐题推进。目标推进顺序按优先级分层、同层内按场次打乱，模型建议的目标不在剩余目标内时回退到该顺序。
+5. 计划时长只是节奏参考：超过时长 5 分钟后，在**当前回答处理完**时自然收尾，不打断正在作答的一轮；剩余时间不足 60 秒时不再新增追问。
+6. 支持暂停 / 继续 / 跳过当前目标 / 结束。暂停或结束时若模型结果仍在路上，写回前会重新加锁检查场次状态与轮次序号，过期结果直接丢弃，已保存的回答与进度不受影响。
+7. 模型失败（超时、无效 JSON、未配置密钥）不会丢回答：场次保留错误码与「待决策」标记，点「重试下一步」只重跑这一步，不重复保存回答，也不自动重试收费请求。提交回答与创建场次都带幂等键，重复提交由唯一约束拦截，不会产生第二条回答。
+8. 规则模式完全本地运行：项目题按事实模板生成，追问按回答长度判断，用于无密钥核对闭环。规则模式不做语义判断，提问质量明显低于模型模式。
+9. 同一份计划重复练习时每场问题不同：目标顺序（同优先级内）、题库取题顺序、项目事实顺序都由**场次 ID 派生**的顺序决定，同场次内稳定可复现，不同场次不同；题库题还会按同计划历史场次的出现次数排序，没问过的排前面。模型模式的判定与出题温度由 `INTERVIEW_QWEN_INTERVIEW_TEMPERATURE`（默认 0.8）控制，并把本场已问题目与同计划历史场次的近期问题一起发过去，明确要求换角度、不重复。考察目标本身不随机——每场覆盖的目标集合与完成标准仍来自冻结计划。
+10. 骨架只覆盖**基础问题**，追问仍然即时生成：追问的输入是"这一轮回答里的缺口"，回答之前不存在。因此每轮判定仍是一次模型调用；骨架省掉的是开场、跳过、重试与切到无模型建议目标时的额外出题调用。骨架缺失或与当前轮次对不上时按顺序回退，不会因为骨架异常而卡住场次。
+
+「回答先保存再调用模型、请求防重复、写回前检查场次状态」这三条是本轮的设计前提，后续加 SSE、断线重连与后台分析时不应绕过。
+
+新增接口（更新 Apifox 的 `/openapi.json` 导入）：
+
+| 路径 | 行为 |
+|---|---|
+| `GET /interviews/options` | 只读返回已确认计划与模型配置状态，不调用模型；每份计划带 `usable` 与不可用原因 `reason`，服务端已按当前契约判定，可用计划排在前面。 |
+| `POST /interviews` | 提交 `request_id`、`plan_id` 与 `mode`，创建场次并生成首问；相同标识与配置重放原场次（HTTP 200），不重复调用模型。 |
+| `GET /interviews` | 分页读取场次摘要（状态、轮数、目标进度），不加载完整资料快照。 |
+| `GET /interviews/{id}` | 读取场次、目标进度、全部轮次与当前问题。 |
+| `POST /interviews/{id}/answers` | 提交 `request_id`、`turn_id` 与 `answer_text`；回答先落库，再生成追问或下一题。 |
+| `POST /interviews/{id}/retry` | 续接未完成的一步：补首问或重跑失败的决策，不重复保存回答。 |
+| `POST /interviews/{id}/pause`、`POST /interviews/{id}/resume` | 提交 `expected_revision`，暂停或继续。 |
+| `POST /interviews/{id}/skip` | 提交 `expected_revision`，跳过当前目标并生成下一问。 |
+| `POST /interviews/{id}/end` | 提交 `expected_revision`，结束场次并保留全部问答与目标进度。 |
+
+已知边界：本轮不提供流式输出（一次请求最长等待模型超时）、不提供逐轮后台分析、复盘、记忆候选，也不提供删除场次；暂停时长计入已用时间。面试侧的标准答案仅保留在快照与会话中，当前不发送给模型。升级前生成的 `planner.v1` 计划（没有 `candidate_scope`、项目 revision、事实证据原文与题目原文）不能用于面试，也无法就地升级：只能按当前配置重新生成并确认，旧计划保留供回看。
 
 ## 使用 Apifox 调试
 
@@ -238,7 +273,7 @@ INTERVIEW_DATABASE_URL=mysql+aiomysql://interview:password@127.0.0.1:3306/interv
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`，以及面试计划的 `interview_plan`（当前 head 为 `0006_interview_plan`）。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
+迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`，面试计划的 `interview_plan`，以及文字面试的 `interview_session`、`interview_turn`（当前 head 为 `0008_interview_outline`，为场次增加基础问题骨架 `outline_json`）。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
 
 `.env`、虚拟环境与 `data/` 不进入版本控制。请勿将简历、题库、数据库凭据或模型密钥加入源码仓库。
 
@@ -263,13 +298,14 @@ src/interview_assistant/
   question_bank/      题库模型、Markdown 提取与导入事务、请求/响应结构及 API
   materials/          PDF/OCR、简历版本、项目事实、AI 提取草稿与人工确认 API
   planner/            面试计划模型、结构化输出契约、生成与确认服务及 API
-  web/                题库、导入预览、简历与项目、面试计划页面，同源调用现有 API
+  interview/          文字面试场次与轮次模型、决策契约、运行时服务及 API
+  web/                题库、导入预览、简历与项目、面试计划、模拟面试页面，同源调用现有 API
 migrations/           Alembic 迁移环境和版本脚本
 data/                 本地 SQLite 数据，已忽略版本控制
 tests/                使用临时文件数据库的离线检查
 ```
 
-后续逐步加入题库元数据写入、文字面试运行时和分析模块，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
+后续逐步加入题库元数据写入、流式事件与断线重连、逐轮后台分析、复盘与记忆候选，并同步补充对应页面。当前先用轻量原生页面完成闭环；是否引入前端框架根据后续交互复杂度决定，部署方案仍待选择。
 
 ## 题库 API
 
@@ -314,7 +350,7 @@ Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
 
 ## 检查命令
 
-按用户约定，日常开发默认不由助手主动运行测试、静态检查或浏览器验证，由用户启动服务后体验；以下命令仅供需要时手工执行。简历与项目、PDF/OCR、Qwen 提取以及本轮新增的面试计划功能均尚未运行验证。
+按用户约定，日常开发默认不由助手主动运行测试、静态检查或浏览器验证，由用户启动服务后体验；以下命令仅供需要时手工执行。简历与项目、PDF/OCR、Qwen 提取、面试计划以及本轮新增的文字面试均尚未运行验证。
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff format --check .
@@ -339,6 +375,6 @@ Markdown 首版切分与预览行为见上文；更复杂的笔记格式后续�
 
 ## 本轮交接
 
-- **本轮完成项**：Planner 收尾与面试运行时契约。确认前复核从「存在性」升级为「内容一致性」——比较简历版本哈希、项目 `revision`、事实内容/类型/来源依据与题目内容版本；快照升级为 `snapshot_version=2`，保存 `revision`、`source_kind`、`evidence_quote`、标准答案与备注原文。新增 `candidate_scope` 区分「允许选用的资料池」与「目标主要依据」；题源分配改为先定参与来源与目标名额再分预算，比例为 0 的来源不产生零预算目标，规划漏掉某一资料类别时返回 `plan_source_missing` 而不是悄悄改比例；规则模式为题库预留目标名额并说明被省略的项目。题目抽取池从最近 200 道改为全部启用题，顺序按导入批次与候选序号还原笔记原顺序。模型输出恢复「格式容错、语义严格」：空白/长度/数量/未知字段自动裁剪，`schema_version`、来源枚举、优先级与引用严格校验。`/runtime` 升级为 `interview_runtime.v1`，含结构化引用与冻结快照。页面新增配置漂移检测（配置改变后禁用确认并提示）、生成期间锁定输入、待查询入口在任务未结束时保留、候选范围卡片与契约版本显示。文档与两处 0002 时代测试断言同步到 `0006`。提示词版本 `planner_prompt.v3` / `planner_rule.v3`，无新迁移、无新依赖。
-- **遗留问题**：按约定未运行迁移、测试、静态检查、浏览器验证或模型试调用。`planner/` 仍无行为测试，`materials/`、`ai/` 亦无；目标文本与引用事实之间仍只做 ID 有效性校验、不做语义支撑校验，需靠引用明细人工核对。旧版计划（`planner.v1`）只能查看，确认与运行时接口返回 409，需重新生成。导入规则仍只覆盖已被验证的 Markdown 结构，扩展需升级 `PARSER_VERSION` 并用多份真实样本验证。
-- **下一步**：文字面试闭环（已确认计划 → 创建场次 → 生成首问 → 提交回答 → 统一 Agent 追问或切题 → 结束并保存），直接消费 `interview_runtime.v1` 的结构化引用与冻结快照；首轮就要落实「回答先保存再调用模型、请求防重复标识、写回前检查场次状态」。题库 AI 标签分类优先级低于该闭环；语音、复杂能力模型、知识图谱、多用户与部署扩展继续后置。每轮交付后按同样三段格式更新本节，避免重新梳理整个项目。
+- **本轮完成项**：基础问题骨架 + 场次多样性。新增 `interview_outline.v1`（`schemas.py` 的 `OutlineDraft` / `SessionOutline`）与 `interview/variety.py`（场次 ID 派生顺序）；迁移 `0008_interview_outline` 给 `interview_session` 加 `outline_json`。创建场次时一次批量生成每个项目目标最多 2 个基础问题并冻结，`_ask_next` / `_next_turn` 优先取骨架、缺失回退即时生成，骨架失败只降级不阻断创建；规则模式用同一套事实模板生成骨架。目标顺序（同优先级内）、题库取题顺序、项目事实顺序按 `sha256(session_id)` 打乱并跨场优先未问过的题；提示词升到 `interview_prompt.v3`（`asked_questions` / `avoid_recent_questions`），新增 `interview_outline_prompt.v1`；面试调用单独用 `INTERVIEW_QWEN_INTERVIEW_TEMPERATURE`（默认 0.8），资料抽取不受影响。
+- **遗留问题**：按约定未运行迁移、测试、静态检查、浏览器验证或模型试调用，需用户启动服务体验。创建场次现在要等一次批量调用（输出更长，预计比单轮 6–7 秒更久），换取开场与切题零额外出题调用；每轮判定调用仍在，所以单轮等待没有本质变化，要压到 3 秒内必须做流式。骨架是一次性产物，之后修改计划或资料不会更新它（与 `runtime_json` 的冻结语义一致）；旧场次 `outline_json` 为 NULL，全部走即时生成。本地库里 4 份历史计划全部是 `planner.v1`（2 份已确认），面试页仍需先重新生成并确认一份。面试无 SSE 流式与断线重连，一次请求最长等待模型超时；暂停时长计入已用时间；暂不支持删除场次；标准答案只保留在快照中、未发送给模型。`interview/`、`planner/`、`materials/`、`ai/` 均无行为测试；目标文本与引用事实之间仍只校验 ID 有效性。
+- **下一步**：先跑一场确认骨架写入与取用（`outline_json` 有值、切题不再多一次调用、失败时能回退），再补 SSE 流式输出与断线恢复，把单轮等待压到 3 秒以内；之后做整场复盘（逐轮观察已随决策写入 `interview_turn.decision_json`）。题库 AI 标签分类优先级更低；语音、复杂能力模型、知识图谱、多用户与部署扩展继续后置。每轮交付后按同样三段格式更新本节，避免重新梳理整个项目。

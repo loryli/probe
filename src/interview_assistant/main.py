@@ -14,6 +14,9 @@ from interview_assistant.api.health import router as health_router
 from interview_assistant.ai.router import router as ai_router
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
+from interview_assistant.interview.router import interview_error_handler
+from interview_assistant.interview.router import router as interview_router
+from interview_assistant.interview.service import InterviewError
 from interview_assistant.logging_config import configure_logging
 from interview_assistant.materials.router import material_error_handler
 from interview_assistant.materials.parse_router import router as parse_router
@@ -54,7 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Personal AI Interview Assistant",
-        description="个人 AI 面试助手 API：个人题库、笔记导入、PDF 简历、项目事实、内容历史与面试计划。",
+        description="个人 AI 面试助手 API：个人题库、笔记导入、PDF 简历、项目事实、内容历史、面试计划与文字面试。",
         version=__version__,
         lifespan=lifespan,
     )
@@ -67,10 +70,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ai_router)
     app.include_router(parse_router)
     app.include_router(planner_router)
+    app.include_router(interview_router)
     app.add_exception_handler(QuestionBankError, question_error_handler)
     app.add_exception_handler(ImportProblem, import_error_handler)
     app.add_exception_handler(MaterialError, material_error_handler)
     app.add_exception_handler(PlannerError, planner_error_handler)
+    app.add_exception_handler(InterviewError, interview_error_handler)
     web_directory = Path(__file__).with_name("web")
     app.mount("/assets", StaticFiles(directory=web_directory), name="assets")
 
@@ -85,5 +90,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/planner", response_class=FileResponse, include_in_schema=False)
     async def planner_workspace() -> FileResponse:
         return FileResponse(web_directory / "planner.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/interview", response_class=FileResponse, include_in_schema=False)
+    async def interview_workspace() -> FileResponse:
+        return FileResponse(web_directory / "interview.html", headers={"Cache-Control": "no-cache"})
 
     return app

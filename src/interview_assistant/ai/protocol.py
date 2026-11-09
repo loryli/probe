@@ -23,6 +23,7 @@ class StructuredModel(Protocol):
         output_type: type[OutputModel],
         prompt_version: str,
         schema_version: str,
+        temperature: float | None = None,
     ) -> OutputModel:
         """Return schema-validated output; adapters own provider errors and timeouts."""
         ...

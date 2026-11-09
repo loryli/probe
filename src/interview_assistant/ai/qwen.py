@@ -46,7 +46,7 @@ class QwenModel:
 
     async def generate(
         self, *, messages: Sequence[ModelMessage], output_type: type[OutputModel],
-        prompt_version: str, schema_version: str,
+        prompt_version: str, schema_version: str, temperature: float | None = None,
     ) -> OutputModel:
         settings = self.settings
         if not configuration_status(settings)["configured"]:
@@ -63,6 +63,9 @@ class QwenModel:
         }
         if settings.qwen_enable_thinking is not None:
             payload["enable_thinking"] = settings.qwen_enable_thinking
+        if temperature is not None:
+            # 面试需要同题不同措辞；抽取类调用不传，保持供应商默认行为。
+            payload["temperature"] = temperature
         started = time.monotonic()
         try:
             async with asyncio.timeout(settings.qwen_timeout_seconds):

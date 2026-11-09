@@ -284,6 +284,8 @@ def test_migration_round_trip_and_model_consistency(bank):
             "project",
             "project_fact",
             "interview_plan",
+            "interview_session",
+            "interview_turn",
         }
 
 

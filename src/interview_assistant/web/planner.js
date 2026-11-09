@@ -481,6 +481,13 @@ function renderPlan(plan) {
     return;
   }
   summary.textContent = result.session_summary || "依据所选资料的面试计划";
+  if (plan.schema_version && plan.schema_version !== planContractVersion) {
+    summary.append(element(
+      "div",
+      "此计划由旧版规则生成，缺少模拟面试所需的运行依据，不能开始面试或再次确认；请按当前输入重新生成。",
+      "result-error",
+    ));
+  }
   const budgets = [
     ["目标时长", formatSeconds(result.duration_target_sec), "仅作节奏参考"],
     ["开场 / 收尾", `${result.opening_buffer_sec}s / ${result.closing_buffer_sec}s`, "缓冲"],

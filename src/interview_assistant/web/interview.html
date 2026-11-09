@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>模拟面试 · 练习场</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/interview.css">
+  <script src="/assets/interview.js" type="module"></script>
+</head>
+<body class="interview-page">
+  <a class="skip-link" href="#main">跳到主内容</a>
+  <aside class="sidebar" aria-label="工作区导航">
+    <a class="brand" href="/"><img src="/assets/favicon.svg" width="38" height="38" alt=""><span>练习场<small>INTERVIEW WORKSPACE</small></span></a>
+    <div class="workspace-label">个人工作区 <span>V1</span></div>
+    <nav><a class="nav-item" href="/"><span aria-hidden="true">▤</span>个人题库</a><a class="nav-item" href="/materials"><span aria-hidden="true">▧</span>简历与项目</a><a class="nav-item" href="/planner"><span aria-hidden="true">◫</span>面试计划</a><a class="nav-item selected" href="/interview" aria-current="page"><span aria-hidden="true">◉</span>模拟面试</a></nav>
+    <section class="journey" aria-labelledby="journey-title"><h2 id="journey-title">你的准备路径</h2><ol>
+      <li><span>01</span><div>整理题库<small>积累自己的问题与答案</small></div></li>
+      <li><span>02</span><div>准备项目<small>保存简历与项目事实</small></div></li>
+      <li><span>03</span><div>制定计划<small>考察目标与时间预算</small></div></li>
+      <li class="current"><span>04</span><div>模拟面试<small>动态提问，逐轮保存</small></div></li>
+    </ol></section>
+    <div class="sidebar-note"><span class="note-mark" aria-hidden="true">✳</span><p>先答出来，<br>再答得好。</p><small>追问只针对你的回答，不按固定题单。</small></div>
+    <div class="sidebar-footer"><span class="avatar" aria-hidden="true">我</span><div>个人面试助手<small>大模型应用开发 / AI 全栈</small></div></div>
+  </aside>
+  <main id="main">
+    <header class="topbar"><span>个人工作区 <span class="slash">/</span> 模拟面试</span><span class="connection" id="connection" role="status">正在读取计划</span></header>
+    <div class="page">
+      <section class="page-heading"><div><div class="eyebrow">PRACTICE BY ANSWERING</div><h1>模拟面试<span class="title-dot">.</span></h1><p>按已确认的计划逐题作答，追问与切题由面试官决定。</p></div><button class="button primary" id="new-session" type="button">＋ 新建面试</button></section>
+      <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" type="button" aria-label="关闭提示">×</button></div>
+      <section class="bank" aria-label="文字面试">
+        <div class="question-column">
+          <div class="list-heading"><h2>面试记录 <span id="session-count">—</span></h2><button class="text-button" id="refresh-sessions" type="button">刷新</button></div>
+          <p class="material-help">每场面试独立保存。刷新页面后可继续未完成的场次。</p>
+          <div id="session-list" class="question-list" aria-live="polite"><p class="list-placeholder">正在读取记录…</p></div>
+          <div class="pagination"><button class="text-button" id="session-previous" type="button" disabled>← 上一页</button><span id="session-page">第 1 页</span><button class="text-button" id="session-next" type="button" disabled>下一页 →</button></div>
+        </div>
+        <div class="editor-column">
+          <section class="welcome" id="interview-welcome"><span class="eyebrow">ONE QUESTION AT A TIME</span><h2>先确认一份计划</h2><p>面试按已确认的计划出题：项目题从事实展开，<br>题库题直接使用你自己的原题。</p><small id="welcome-note">点击右上角「新建面试」选择计划开始；每题提交后先保存回答，再生成追问或下一题。</small></section>
+
+          <section id="start-panel" class="interview-start" hidden aria-labelledby="start-title">
+            <div class="editor-heading"><div><div class="eyebrow">START FROM A CONFIRMED PLAN</div><h2 id="start-title">开始一场面试</h2></div><span class="save-state">未开始</span></div>
+            <form id="start-form" class="interview-form">
+              <div class="field"><label for="plan-select">已确认的面试计划 <span class="required">*</span></label><select id="plan-select" required></select><p class="material-help" id="plan-hint">只列出已确认的计划；开始后资料与目标会冻结，不再跟随资料修改。</p><p class="material-help" id="plan-fix" hidden><a href="/planner">去「面试计划」页按当前配置重新生成并确认 ↗</a></p></div>
+              <div class="field"><label for="session-mode">出题方式</label><select id="session-mode"><option value="model">Qwen 面试官（模型判断追问与切题）</option><option value="rule">规则模式（不调用模型）</option></select><p class="material-help" id="model-status">正在读取模型配置…</p></div>
+              <p class="material-help">开始时会一次生成各目标的基础问题（首次需等待十几秒）；之后切题直接取用，追问才调用模型。每题只问一件事，追问受总上限与单目标上限约束。</p>
+              <footer class="editor-actions"><span class="original-note">计划时长只作节奏参考，超过 5 分钟后在回答结束时收尾。</span><button class="button primary" id="start-session" type="submit">开始面试 ↗</button></footer>
+            </form>
+          </section>
+
+          <section id="interview-room" class="interview-room" hidden aria-labelledby="room-title">
+            <div class="editor-heading"><div><div class="eyebrow">INTERVIEW IN PROGRESS</div><h2 id="room-title">模拟面试</h2></div><span class="save-state" id="room-status">进行中</span></div>
+            <div class="room-meta" id="room-meta"></div>
+            <div class="objective-rail" id="objective-rail" aria-label="考察目标进度"></div>
+            <div class="conversation" id="conversation" aria-live="polite"></div>
+            <div class="answer-box" id="answer-box">
+              <label for="answer-text">你的回答 <span class="field-hint">Ctrl + Enter 提交</span></label>
+              <textarea id="answer-text" rows="7" maxlength="8000" placeholder="按真实面试的方式作答：先给结论，再说依据、取舍和结果。"></textarea>
+              <div class="answer-actions">
+                <span class="save-state" id="answer-hint"></span>
+                <button class="text-button danger" id="skip-objective" type="button">跳过当前目标</button>
+                <button class="button" id="pause-session" type="button">暂停</button>
+                <button class="button primary" id="submit-answer" type="button">提交回答 ↗</button>
+              </div>
+            </div>
+            <div class="room-notice" id="room-notice" hidden></div>
+            <div class="room-actions">
+              <button class="button" id="resume-session" type="button" hidden>继续面试</button>
+              <button class="button" id="retry-step" type="button" hidden>继续生成</button>
+              <span class="original-note" id="room-note">回答会先保存，再调用模型决定下一步。</span>
+              <button class="text-button danger" id="end-session" type="button">结束面试</button>
+            </div>
+            <div class="room-summary" id="room-summary" hidden></div>
+          </section>
+        </div>
+      </section>
+      <footer class="page-footer"><span>答完再复盘，别急着评价自己。</span><span>回答先落库 · 追问有上限 · 题源固定</span></footer>
+    </div>
+  </main>
+  <noscript>请启用 JavaScript，以进行文字模拟面试。</noscript>
+</body>
+</html>

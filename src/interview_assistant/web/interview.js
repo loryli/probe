@@ -1,0 +1,664 @@
+const $ = (id) => document.getElementById(id);
+const base = "/interviews";
+const pageSize = 10;
+const state = {
+  options: null, sessions: [], total: 0, offset: 0,
+  session: null, busy: false, timer: null, waitTimer: null, fetchedAt: 0,
+};
+
+const statusLabels = { active: "进行中", paused: "已暂停", completed: "已结束" };
+const objectiveLabels = { pending: "待考察", active: "进行中", covered: "已覆盖", skipped: "已跳过" };
+const sourceLabels = { project: "项目题", question_bank: "题库题" };
+const priorityLabels = { high: "高", medium: "中", low: "低" };
+const decisionLabels = { follow_up: "追问", continue: "同目标续问", switch: "切换目标", complete: "收尾" };
+
+const formatDate = (value) => new Date(value).toLocaleString("zh-CN", { hour12: false });
+const formatSeconds = (value) => {
+  const seconds = Math.max(0, Number(value) || 0);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
+};
+
+class ApiError extends Error {
+  constructor(message, status, code) { super(message); this.status = status; this.code = code; }
+}
+
+async function request(path, options = {}) {
+  const { timeoutMs = 60000, ...fetchOptions } = options;
+  let response;
+  try {
+    response = await fetch(path, {
+      ...fetchOptions,
+      headers: { Accept: "application/json", ...fetchOptions.headers },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    throw new ApiError("连接失败或请求超时。回答可能已经保存，刷新本场记录即可确认。", 0);
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = body?.detail;
+    const fallback = {
+      404: "场次或计划已不存在，请刷新列表。",
+      409: "状态已变化，请刷新本场记录后重试。",
+      422: "输入不符合要求，请检查后重试。",
+      503: "服务暂不可用，请确认数据库与模型配置。",
+    };
+    throw new ApiError(
+      typeof detail?.message === "string" ? detail.message :
+        fallback[response.status] || "操作未完成，请稍后重试。",
+      response.status, detail?.code,
+    );
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+function element(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (className) node.className = className;
+  return node;
+}
+
+function notify(message, error = false) {
+  $("message-text").textContent = message;
+  $("message").classList.toggle("error", error);
+  $("message").hidden = false;
+}
+
+function report(error) {
+  notify(error instanceof ApiError ? error.message : "操作未完成，请稍后重试。", true);
+}
+
+function setBusy(value) {
+  state.busy = value;
+  for (const node of $("interview-room").querySelectorAll("button")) node.disabled = value;
+  $("start-session").disabled = value || !selectedPlanUsable();
+  if (state.session) renderControls(state.session);
+}
+
+// 每轮都要等一次模型调用，把等待时间显式呈现出来，而不是只留一句静态提示。
+function startWait(message) {
+  stopWait();
+  const started = Date.now();
+  const tick = () => {
+    const text = `${message}已等待 ${((Date.now() - started) / 1000).toFixed(1)}s`;
+    $("answer-hint").textContent = text;
+    // 没有待答问题时回答框是隐藏的，等待信息还要落在底部备注上。
+    $("room-note").textContent = text;
+  };
+  tick();
+  state.waitTimer = setInterval(tick, 200);
+}
+
+function stopWait() {
+  if (state.waitTimer) clearInterval(state.waitTimer);
+  state.waitTimer = null;
+  $("answer-hint").textContent = "";
+  $("room-note").textContent = "回答会先保存，再调用模型决定下一步。";
+}
+
+function showWelcome() {
+  $("interview-welcome").hidden = false;
+  $("start-panel").hidden = true;
+  $("interview-room").hidden = true;
+  const note = $("welcome-note");
+  if (!state.options) return;
+  note.textContent = planOptions().some((item) => item.usable)
+    ? "点击右上角「新建面试」选择计划开始；每题提交后先保存回答，再生成追问或下一题。"
+    : "已有的已确认计划都来自旧版规则，缺少模拟面试所需的运行依据；请先到「面试计划」页按当前配置重新生成并确认。";
+}
+
+function showStart() {
+  state.session = null;
+  clearInterval(state.timer);
+  $("answer-text").value = "";
+  $("interview-welcome").hidden = true;
+  $("interview-room").hidden = true;
+  $("start-panel").hidden = false;
+  renderPlanOptions();
+  $("plan-select").focus();
+}
+
+function showRoom() {
+  $("interview-welcome").hidden = true;
+  $("start-panel").hidden = true;
+  $("interview-room").hidden = false;
+}
+
+async function loadOptions() {
+  state.options = await request(`${base}/options`);
+  renderPlanOptions();
+}
+
+function planOptions() {
+  return state.options?.plans || [];
+}
+
+function selectedPlan() {
+  const value = $("plan-select").value;
+  return planOptions().find((item) => item.id === value) || null;
+}
+
+function selectedPlanUsable() {
+  const plan = selectedPlan();
+  return Boolean(plan && plan.usable);
+}
+
+function planLabel(plan) {
+  return `${plan.direction || "未填写方向"} · ${plan.duration_minutes} 分钟 · `
+    + `${plan.objective_count} 个目标 · ${formatDate(plan.confirmed_at || plan.created_at)}`;
+}
+
+function renderPlanOptions() {
+  const options = state.options;
+  if (!options) return;
+  const select = $("plan-select");
+  const previous = select.value;
+  const usable = planOptions().filter((item) => item.usable);
+  const unusable = planOptions().filter((item) => !item.usable);
+  select.replaceChildren();
+  if (!usable.length) {
+    select.append(element("option", planOptions().length
+      ? "— 没有可用的计划 —" : "— 还没有已确认的计划 —"));
+    select.disabled = true;
+  } else {
+    select.disabled = false;
+    for (const plan of usable) {
+      const option = element("option", planLabel(plan));
+      option.value = plan.id;
+      select.append(option);
+    }
+    // 旧版计划保留展示但不可选，避免「选得到、点不动」的困惑。
+    for (const plan of unusable) {
+      const option = element("option", `${planLabel(plan)} · 需重新生成`);
+      option.value = plan.id;
+      option.disabled = true;
+      option.title = plan.reason || "旧版计划缺少新版运行依据";
+      select.append(option);
+    }
+    if (previous && usable.some((item) => item.id === previous)) select.value = previous;
+    else select.selectedIndex = 0;
+  }
+  const hint = $("plan-hint");
+  hint.classList.remove("error");
+  if (!planOptions().length) {
+    hint.classList.add("error");
+    hint.textContent = "还没有已确认的计划：先到「面试计划」页生成并确认一份计划，再回来开始面试。";
+  } else if (!usable.length) {
+    hint.classList.add("error");
+    hint.textContent = `这 ${unusable.length} 份计划由旧版规则生成，缺少新版运行依据，`
+      + "不能开始面试。请按当前配置重新生成并确认一份计划。";
+  } else if (unusable.length) {
+    hint.textContent = `只列出已确认的计划；开始后资料与目标会冻结。`
+      + `另有 ${unusable.length} 份旧版计划不能使用（已置灰），需重新生成并确认。`;
+  } else {
+    hint.textContent = "只列出已确认的计划；开始后资料与目标会冻结，不再跟随资料修改。";
+  }
+  $("plan-fix").hidden = usable.length > 0;
+  $("start-session").disabled = state.busy || !usable.length;
+  const model = options.model || {};
+  $("model-status").textContent = model.configured
+    ? `模型 ${model.model || "—"} 已配置；可切换规则模式，不调用模型。`
+    : `模型未配置（缺少 ${(model.missing || []).join("、") || "密钥"}）；可先用规则模式走完整场次。`;
+}
+
+async function loadSessions() {
+  const data = await request(`${base}?limit=${pageSize}&offset=${state.offset}`);
+  state.sessions = data.items;
+  state.total = data.total;
+  renderSessionList();
+}
+
+function renderSessionList() {
+  const list = $("session-list");
+  list.replaceChildren();
+  $("session-count").textContent = String(state.total);
+  if (!state.sessions.length) {
+    list.append(element("p", "还没有面试记录。确认计划后开始第一场。", "list-placeholder"));
+  }
+  for (const session of state.sessions) {
+    const card = element("button", null, "session-card");
+    card.type = "button";
+    card.classList.toggle("selected", state.session?.id === session.id);
+    const title = element("strong", session.direction || "未填写方向");
+    const line = element("small",
+      `${statusLabels[session.status] || session.status} · ${session.mode === "model" ? "Qwen" : "规则"} · `
+      + `${session.answer_count} 轮回答 · 目标 ${session.objective_done}/${session.objective_total}`);
+    const time = element("small", `${formatDate(session.created_at)} · 用时 ${formatSeconds(session.elapsed_sec)}`);
+    card.append(title, line, time);
+    card.addEventListener("click", () => { openSession(session.id); });
+    list.append(card);
+  }
+  $("session-page").textContent = `第 ${Math.floor(state.offset / pageSize) + 1} 页`;
+  $("session-previous").disabled = state.offset === 0;
+  $("session-next").disabled = state.offset + pageSize >= state.total;
+}
+
+async function openSession(id) {
+  if (state.busy) return;
+  setBusy(true);
+  try {
+    const session = await request(`${base}/${id}`);
+    state.session = session;
+    state.fetchedAt = Date.now();
+    $("answer-text").value = "";
+    showRoom();
+    renderSession(session);
+    renderSessionList();
+    startTimer();
+  } catch (error) {
+    report(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function startSession(event) {
+  event.preventDefault();
+  const plan = selectedPlan();
+  if (!plan || !plan.usable) {
+    notify(plan?.reason
+      ? `${plan.reason}。请到「面试计划」页重新生成并确认后再开始。`
+      : "请先选择一份可用的已确认计划。", true);
+    return;
+  }
+  const planId = plan.id;
+  setBusy(true);
+  // 创建场次会一次性生成每个目标的基础问题，这一步比单轮提问更久。
+  $("connection").textContent = "正在生成题单";
+  $("start-session").textContent = "正在生成题单…";
+  try {
+    const session = await request(base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        plan_id: planId,
+        mode: $("session-mode").value,
+      }),
+      timeoutMs: 180000,
+    });
+    state.session = session;
+    state.fetchedAt = Date.now();
+    showRoom();
+    renderSession(session);
+    startTimer();
+    $("connection").textContent = "已连接";
+    await loadSessions();
+    if (session.error_code) {
+      notify(`首问没有生成成功：${session.error_message || session.error_code}。场次已保存，可点「继续生成下一问」。`, true);
+    }
+  } catch (error) {
+    report(error);
+  } finally {
+    $("start-session").textContent = "开始面试 ↗";
+    setBusy(false);
+  }
+}
+
+async function submitAnswer() {
+  const session = state.session;
+  if (!session || !session.current_turn || state.busy) return;
+  const text = $("answer-text").value.trim();
+  if (!text) {
+    notify("先写下你的回答再提交。", true);
+    $("answer-text").focus();
+    return;
+  }
+  setBusy(true);
+  startWait("正在保存回答并生成下一步…");
+  try {
+    const updated = await request(`${base}/${session.id}/answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        turn_id: session.current_turn.id,
+        answer_text: text,
+      }),
+      timeoutMs: 180000,
+    });
+    state.session = updated;
+    state.fetchedAt = Date.now();
+    $("answer-text").value = "";
+    stopWait();
+    renderSession(updated);
+    await loadSessions();
+    if (updated.error_code) {
+      notify(`回答已保存。下一步没有生成成功：${updated.error_message || updated.error_code}。可点「重试下一步」。`, true);
+    }
+  } catch (error) {
+    report(error);
+    await refreshQuietly();
+  } finally {
+    stopWait();
+    setBusy(false);
+  }
+}
+
+async function retryStep() {
+  const session = state.session;
+  if (!session || state.busy) return;
+  setBusy(true);
+  startWait("正在续接…");
+  try {
+    const updated = await request(`${base}/${session.id}/retry`, {
+      method: "POST",
+      timeoutMs: 180000,
+    });
+    state.session = updated;
+    state.fetchedAt = Date.now();
+    renderSession(updated);
+    await loadSessions();
+    if (updated.error_code) notify(`${updated.error_message || updated.error_code}`, true);
+  } catch (error) {
+    report(error);
+  } finally {
+    stopWait();
+    setBusy(false);
+  }
+}
+
+async function control(action, confirmText) {
+  const session = state.session;
+  if (!session || state.busy) return;
+  if (confirmText && !window.confirm(confirmText)) return;
+  setBusy(true);
+  try {
+    const updated = await request(`${base}/${session.id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: session.revision }),
+      timeoutMs: 180000,
+    });
+    state.session = updated;
+    state.fetchedAt = Date.now();
+    renderSession(updated);
+    await loadSessions();
+    if (updated.error_code) notify(`${updated.error_message || updated.error_code}`, true);
+  } catch (error) {
+    report(error);
+    await refreshQuietly();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function refreshQuietly() {
+  const session = state.session;
+  if (!session) return;
+  try {
+    const updated = await request(`${base}/${session.id}`);
+    // 回答已被服务端接收时清空草稿，避免重复提交到下一题。
+    if (updated.answer_count > session.answer_count) $("answer-text").value = "";
+    state.session = updated;
+    state.fetchedAt = Date.now();
+    renderSession(updated);
+    await loadSessions();
+  } catch { /* 保留当前画面，错误已在主流程提示 */ }
+}
+
+function startTimer() {
+  clearInterval(state.timer);
+  state.timer = setInterval(() => {
+    const session = state.session;
+    const node = $("room-elapsed");
+    if (!session || !node) return;
+    const extra = session.status === "active" ? Math.floor((Date.now() - state.fetchedAt) / 1000) : 0;
+    const strong = node.querySelector("strong");
+    if (strong) strong.textContent = formatSeconds(session.elapsed_sec + extra);
+  }, 1000);
+}
+
+function objectiveText(session, objectiveId) {
+  const objective = session.objectives.find((item) => item.id === objectiveId);
+  if (!objective) return objectiveId || "未关联目标";
+  return `${objective.id} · ${objective.topic}`;
+}
+
+function renderSession(session) {
+  $("room-status").textContent = statusLabels[session.status] || session.status;
+  $("room-status").className = `save-state`;
+  $("room-title").textContent = session.direction ? `面试 · ${session.direction.slice(0, 28)}` : "模拟面试";
+  if (session.status === "completed") $("answer-text").value = "";
+  renderMeta(session);
+  renderObjectives(session);
+  renderConversation(session);
+  renderControls(session);
+  renderNotice(session);
+  renderSummary(session);
+}
+
+function renderMeta(session) {
+  const node = $("room-meta");
+  node.replaceChildren();
+  const covered = session.objectives.filter((item) => item.status === "covered").length;
+  const entries = [
+    ["目标", `${covered}/${session.objectives.length} 已覆盖`],
+    ["问答", `${session.answer_count} 轮 / ${session.question_count} 问`],
+    ["追问", `${session.followups_used} 次`],
+    ["方式", session.mode === "model" ? `Qwen${session.model ? ` · ${session.model}` : ""}` : "规则模式"],
+    ["计划", `${Math.round(session.duration_target_sec / 60)} 分钟`],
+    ["契约", session.prompt_version],
+  ];
+  for (const [label, value] of entries) {
+    const span = element("span");
+    span.append(element("small", `${label} `), element("strong", value));
+    node.append(span);
+  }
+  const elapsed = element("span");
+  elapsed.id = "room-elapsed";
+  elapsed.append(element("small", "用时 "), element("strong", formatSeconds(session.elapsed_sec)));
+  node.append(elapsed);
+  const remaining = session.duration_target_sec - session.elapsed_sec;
+  node.append(element("span", remaining >= 0
+    ? `计划剩余 ${formatSeconds(remaining)}`
+    : `已超计划 ${formatSeconds(-remaining)}`));
+}
+
+function renderObjectives(session) {
+  const rail = $("objective-rail");
+  rail.replaceChildren();
+  for (const objective of session.objectives) {
+    const chip = element("span", `${objective.id} · ${objective.topic}`, `rail-chip ${objective.status}`);
+    chip.title = `${sourceLabels[objective.source]} · ${priorityLabels[objective.priority]}优先级 · `
+      + `${objectiveLabels[objective.status]} · 已问 ${objective.asked} · 追问 ${objective.followups}/${objective.max_followups}`;
+    rail.append(chip);
+  }
+}
+
+function renderConversation(session) {
+  const box = $("conversation");
+  box.replaceChildren();
+  let questionIndex = 0;
+  let answerIndex = 0;
+  for (const turn of session.turns) {
+    if (turn.role === "interviewer") {
+      questionIndex += 1;
+      const card = element("article", null, "turn question");
+      const head = element("div", null, "turn-head");
+      head.append(element("span", `第 ${questionIndex} 问`));
+      if (turn.source) head.append(element("span", sourceLabels[turn.source] || turn.source, "room-badge"));
+      if (turn.objective_id) head.append(element("span", objectiveText(session, turn.objective_id)));
+      if (turn.is_followup) head.append(element("span", "追问", "room-badge turn-followup"));
+      if (turn.skipped) head.append(element("span", "已跳过", "turn-skipped"));
+      card.append(head, element("p", turn.text, "turn-text"));
+      box.append(card);
+      continue;
+    }
+    answerIndex += 1;
+    const card = element("article", null, "turn answer");
+    const head = element("div", null, "turn-head");
+    head.append(element("span", `第 ${answerIndex} 轮回答`));
+    if (turn.decision) {
+      head.append(element("span", decisionLabels[turn.decision.action] || turn.decision.action, "room-badge"));
+    }
+    card.append(head, element("p", turn.text, "turn-text"));
+    if (turn.decision) {
+      const note = [
+        turn.decision.observation ? `观察：${turn.decision.observation}` : "",
+        turn.decision.reason ? `理由：${turn.decision.reason}` : "",
+      ].filter(Boolean).join(" · ");
+      if (note) card.append(element("p", note, "turn-note"));
+    }
+    box.append(card);
+  }
+  if (!session.turns.length) {
+    box.append(element("p", "正在生成第一个问题…", "list-placeholder"));
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderControls(session) {
+  const active = session.status === "active";
+  const paused = session.status === "paused";
+  const completed = session.status === "completed";
+  const hasQuestion = Boolean(session.current_turn);
+  $("answer-box").hidden = !(active && hasQuestion);
+  $("skip-objective").hidden = !(active && hasQuestion);
+  $("pause-session").hidden = !active;
+  $("resume-session").hidden = !paused;
+  $("retry-step").hidden = !(active && !hasQuestion);
+  $("retry-step").textContent = session.pending_turn_id ? "重试下一步" : "继续生成下一问";
+  $("retry-step").disabled = state.busy;
+  $("end-session").hidden = completed;
+  $("submit-answer").disabled = state.busy;
+  $("pause-session").disabled = state.busy;
+  $("resume-session").disabled = state.busy;
+  $("skip-objective").disabled = state.busy;
+  $("end-session").disabled = state.busy;
+  $("room-note").textContent = completed
+    ? "本场记录已保存，可回看每一轮问答。"
+    : "回答会先保存，再调用模型决定下一步。";
+}
+
+function renderNotice(session) {
+  const notice = $("room-notice");
+  notice.className = "room-notice";
+  if (session.status === "completed") {
+    notice.hidden = true;
+    return;
+  }
+  if (session.status === "paused") {
+    notice.hidden = false;
+    notice.textContent = "已暂停。当前问题与已提交的回答都已保存，点「继续面试」接着答。";
+    return;
+  }
+  if (!session.current_turn) {
+    notice.hidden = false;
+    if (session.pending_turn_id) {
+      notice.className = "room-notice error";
+      notice.textContent = session.error_code
+        ? `回答已保存，但下一步没有生成成功：${session.error_message || session.error_code}。点「重试下一步」继续，不会重复保存回答。`
+        : "回答已保存，正在等待下一步。";
+    } else {
+      notice.className = session.error_code ? "room-notice error" : "room-notice";
+      notice.textContent = session.error_code
+        ? `问题没有生成成功：${session.error_message || session.error_code}。点「继续生成下一问」重试。`
+        : "当前没有待回答的问题，点「继续生成下一问」获取下一题。";
+    }
+    return;
+  }
+  if (session.error_code) {
+    notice.hidden = false;
+    notice.textContent = `${session.error_message || session.error_code}（当前问题仍可作答）`;
+    return;
+  }
+  notice.hidden = true;
+}
+
+function renderSummary(session) {
+  const node = $("room-summary");
+  if (session.status !== "completed") {
+    node.hidden = true;
+    node.replaceChildren();
+    return;
+  }
+  node.replaceChildren();
+  node.hidden = false;
+  const covered = session.objectives.filter((item) => item.status === "covered").length;
+  const skipped = session.objectives.filter((item) => item.status === "skipped").length;
+  node.append(element("h3", "本场已结束，记录已保存"));
+  const grid = element("div", null, "summary-grid");
+  const cards = [
+    ["回答问题", `${session.answer_count} 轮`],
+    ["提出问题", `${session.question_count} 个`],
+    ["覆盖目标", `${covered}/${session.objectives.length}`],
+    ["用时", formatSeconds(session.elapsed_sec)],
+  ];
+  for (const [label, value] of cards) {
+    const card = element("div", null, "summary-card");
+    card.append(element("strong", value), element("small", label));
+    grid.append(card);
+  }
+  node.append(grid);
+  if (session.completion_reason) node.append(element("p", session.completion_reason));
+  if (skipped) node.append(element("p", `有 ${skipped} 个目标被跳过，未展开考察。`));
+  const list = element("ul");
+  for (const objective of session.objectives) {
+    const state = objective.status === "covered" ? "已覆盖"
+      : objective.status === "skipped" ? "已跳过"
+        : objective.status === "active" ? "未完成" : "未开始";
+    list.append(element("li", `${objective.id} · ${objective.topic} — ${state}（问 ${objective.asked} / 追问 ${objective.followups}）`));
+  }
+  node.append(list);
+  const again = element("button", "再开一场 ↗", "button primary");
+  again.type = "button";
+  again.addEventListener("click", showStart);
+  node.append(again);
+}
+
+function bind() {
+  $("new-session").addEventListener("click", showStart);
+  $("refresh-sessions").addEventListener("click", () => {
+    loadSessions().then(() => notify("记录已刷新。")).catch(report);
+  });
+  $("session-previous").addEventListener("click", () => {
+    state.offset = Math.max(0, state.offset - pageSize);
+    loadSessions().catch(report);
+  });
+  $("session-next").addEventListener("click", () => {
+    state.offset += pageSize;
+    loadSessions().catch(report);
+  });
+  $("dismiss-message").addEventListener("click", () => { $("message").hidden = true; });
+  $("start-form").addEventListener("submit", startSession);
+  $("submit-answer").addEventListener("click", submitAnswer);
+  $("answer-text").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      submitAnswer();
+    }
+  });
+  $("retry-step").addEventListener("click", retryStep);
+  $("pause-session").addEventListener("click", () => control("pause"));
+  $("resume-session").addEventListener("click", () => control("resume"));
+  $("skip-objective").addEventListener("click", () => control(
+    "skip", "跳过当前目标？已提交的回答会保留，之后不再追问这个目标。",
+  ));
+  $("end-session").addEventListener("click", () => control(
+    "end", "结束这场面试？已保存的问答与目标进度都会保留。",
+  ));
+}
+
+async function boot() {
+  bind();
+  try {
+    await Promise.all([loadOptions(), loadSessions()]);
+    $("connection").textContent = "已连接";
+    $("connection").classList.add("ok");
+    const unfinished = state.sessions.find((item) => item.status !== "completed");
+    if (unfinished) await openSession(unfinished.id);
+    else showWelcome();
+  } catch (error) {
+    $("connection").textContent = "读取失败";
+    $("connection").classList.add("error");
+    report(error);
+    showWelcome();
+  }
+}
+
+boot();
