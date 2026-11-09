@@ -62,10 +62,13 @@ class SnapshotFact(InputModel):
     id: UUID
     fact_type: str
     content: str
+    source_kind: Literal["resume", "user_edit"] | None = None
+    evidence_quote: str | None = None
 
 
 class SnapshotProject(InputModel):
     id: UUID
+    revision: int | None = None
     name: str
     role: str
     tech_stack: list[str]
@@ -76,11 +79,14 @@ class SnapshotQuestion(InputModel):
     id: UUID
     question_text: str
     content_version: int
+    standard_answer_text: str | None = None
+    user_notes: str | None = None
 
 
 class PlanSnapshot(InputModel):
     """生成时固定的资料版本；确认计划时据此复核引用是否仍然有效。"""
 
+    snapshot_version: Literal[1, 2] = 1
     resume_id: UUID
     resume_name: str
     source_version: int
@@ -89,8 +95,19 @@ class PlanSnapshot(InputModel):
     questions: list[SnapshotQuestion]
 
 
+def planning_sources(snapshot: PlanSnapshot, inputs: PlanInputs) -> list[str]:
+    """只有一种材料时允许降级；两种都有时尊重 0% / 100% 排除。"""
+    project = any(item.facts for item in snapshot.projects)
+    bank = bool(snapshot.questions)
+    if project and bank:
+        return (["project"] if inputs.project_ratio > 0 else []) + (
+            ["question_bank"] if inputs.project_ratio < 1 else []
+        )
+    return (["project"] if project else []) + (["question_bank"] if bank else [])
+
+
 class ObjectiveDraft(InputModel):
-    """模型只输出语义骨架；输出偏差在校验前裁剪，避免一份计划因格式问题整体失败。"""
+    """模型只输出语义骨架；未知字段丢弃，枚举与引用不做纠正。"""
 
     topic: str = Field(min_length=1, max_length=120)
     source_preference: Literal["project", "question_bank"]
@@ -104,20 +121,23 @@ class ObjectiveDraft(InputModel):
     @model_validator(mode="before")
     @classmethod
     def normalize(cls, data: object) -> object:
+        """只做空白、长度、数量与未知字段的格式处理；枚举和引用仍严格校验。"""
         if not isinstance(data, dict):
             return data
-        allowed = {
-            "topic", "source_preference", "priority", "observable_evidence",
-            "project_fact_ids", "question_ids", "completion_rule", "max_followups",
+        cleaned = {
+            key: value for key, value in data.items()
+            if key in {
+                "topic", "source_preference", "priority", "observable_evidence",
+                "project_fact_ids", "question_ids", "completion_rule", "max_followups",
+            }
         }
-        cleaned = {key: value for key, value in data.items() if key in allowed}
         topic = cleaned.get("topic")
         if isinstance(topic, str):
             cleaned["topic"] = topic.strip()[:120]
         evidence = cleaned.get("observable_evidence")
         if isinstance(evidence, list):
             cleaned["observable_evidence"] = [
-                str(item).strip()[:80] for item in evidence if str(item).strip()
+                item.strip()[:80] for item in evidence if isinstance(item, str)
             ][:3]
         rule = cleaned.get("completion_rule")
         if isinstance(rule, str):
@@ -126,6 +146,9 @@ class ObjectiveDraft(InputModel):
             values = cleaned.get(key)
             if isinstance(values, list):
                 cleaned[key] = [str(item) for item in values][:20]
+        followups = cleaned.get("max_followups")
+        if isinstance(followups, int) and not isinstance(followups, bool):
+            cleaned["max_followups"] = max(0, min(followups, 3))
         return cleaned
 
     @field_validator("priority", mode="before")
@@ -135,7 +158,7 @@ class ObjectiveDraft(InputModel):
             lowered = value.strip().lower()
             if lowered in {"high", "medium", "low"}:
                 return lowered
-            return {"高": "high", "中": "medium", "低": "low"}.get(lowered, "medium")
+            return lowered
         return value
 
     @field_validator("source_preference", mode="before")
@@ -143,16 +166,14 @@ class ObjectiveDraft(InputModel):
     def normalize_source(cls, value: object) -> object:
         if isinstance(value, str):
             lowered = value.strip().lower()
-            if "project" in lowered or "项目" in lowered:
-                return "project"
-            return "question_bank"
+            return lowered
         return value
 
 
 class PlannerDraft(InputModel):
     """session_summary 仅为兼容旧模型输出保留，服务端一律程序化生成摘要。"""
 
-    schema_version: Literal["planner.v1"] = "planner.v1"
+    schema_version: Literal["planner.v2"] = "planner.v2"
     session_summary: str = Field(default="", max_length=500)
     objectives: list[ObjectiveDraft] = Field(default_factory=list, max_length=MAX_OBJECTIVES)
     limitations: list[str] = Field(default_factory=list, max_length=6)
@@ -160,21 +181,27 @@ class PlannerDraft(InputModel):
     @model_validator(mode="before")
     @classmethod
     def normalize(cls, data: object) -> object:
+        """schema_version 不纠正；其余只裁剪长度、数量与未知字段。"""
         if not isinstance(data, dict):
             return data
-        cleaned = dict(data)
+        cleaned = {
+            key: value for key, value in data.items()
+            if key in {"schema_version", "session_summary", "objectives", "limitations", "notes"}
+        }
         if "limitations" not in cleaned and "notes" in cleaned:
-            cleaned["limitations"] = cleaned["notes"]
-        cleaned.pop("session_summary", None)
-        cleaned["schema_version"] = "planner.v1"
+            cleaned["limitations"] = cleaned.pop("notes")
+        summary = cleaned.get("session_summary")
+        if isinstance(summary, str):
+            cleaned["session_summary"] = summary.strip()[:500]
+        notes = cleaned.get("limitations")
+        if isinstance(notes, list):
+            cleaned["limitations"] = [
+                item.strip()[:300] for item in notes if isinstance(item, str)
+            ][:6]
         objectives = cleaned.get("objectives")
         if isinstance(objectives, list):
             cleaned["objectives"] = objectives[:MAX_OBJECTIVES]
-        notes = cleaned.get("limitations")
-        if isinstance(notes, list):
-            cleaned["limitations"] = [str(item)[:300] for item in notes][:6]
-        allowed = {"schema_version", "session_summary", "objectives", "limitations"}
-        return {key: value for key, value in cleaned.items() if key in allowed}
+        return cleaned
 
 
 class PlanConstraints(InputModel):
@@ -214,10 +241,17 @@ class PlanCoverage(InputModel):
     projects_total: int
 
 
+class CandidateScope(InputModel):
+    """允许选择的资料池；引用只是目标依据，选择仍须与当前目标相关。"""
+
+    project_fact_ids: list[UUID] = Field(default_factory=list)
+    question_ids: list[UUID] = Field(default_factory=list)
+
+
 class PlanOutput(InputModel):
     """目标与预算，不含固定问题清单；新增字段均可选，旧计划仍可读取。"""
 
-    schema_version: Literal["planner.v1"]
+    schema_version: Literal["planner.v1", "planner.v2"]
     session_summary: str
     objectives: list[PlanObjective]
     source_time_budget_sec: dict[str, int]
@@ -229,6 +263,38 @@ class PlanOutput(InputModel):
     notes: PlanNotes = Field(default_factory=PlanNotes)
     coverage: PlanCoverage | None = None
     runtime_context: dict[str, str] = Field(default_factory=dict)
+    candidate_scope: CandidateScope | None = None
+
+    @model_validator(mode="after")
+    def validate_v2_budgets(self) -> "PlanOutput":
+        if self.schema_version == "planner.v1":
+            return self
+        if not self.objectives or self.candidate_scope is None:
+            raise ValueError("Plan requires objectives and a candidate scope")
+        if len({item.id for item in self.objectives}) != len(self.objectives):
+            raise ValueError("Duplicate objective ID")
+        for source in ("project", "question_bank"):
+            allocated = sum(
+                item.time_budget_sec
+                for item in self.objectives
+                if item.source_preference == source
+            )
+            budget = self.source_time_budget_sec.get(source, -1)
+            if budget < 0 or allocated != budget:
+                raise ValueError("Source and objective budgets disagree")
+        if any(item.time_budget_sec <= 0 for item in self.objectives):
+            raise ValueError("Zero-budget objectives cannot be scheduled")
+        total_budget = (
+            sum(self.source_time_budget_sec.values())
+            + self.opening_buffer_sec
+            + self.closing_buffer_sec
+        )
+        if total_budget != self.duration_target_sec:
+            raise ValueError("Plan budget does not match duration")
+        followups = sum(item.max_followups for item in self.objectives)
+        if followups > self.constraints.max_total_followups:
+            raise ValueError("Follow-up allocations exceed total")
+        return self
 
 
 class PlanRuntimeObjective(BaseModel):
@@ -239,22 +305,33 @@ class PlanRuntimeObjective(BaseModel):
     time_budget_sec: int
     max_followups: int
     context: str
+    project_fact_ids: list[UUID]
+    question_ids: list[UUID]
+    observable_evidence: list[str]
+    completion_rule: str
 
 
 class PlanRuntime(BaseModel):
-    """供实时链路直接取用的精简投影：不含快照全文，无需二次拼装或模型调用。"""
+    """服务端运行时契约。快照是原文依据；context 只是摘要，不可用于恢复原题。"""
 
+    contract_version: Literal["interview_runtime.v1"] = "interview_runtime.v1"
     plan_id: UUID
+    plan_revision: int
     status: str
     confirmed_at: datetime | None
     resume_id: UUID
     source_version: int
     schema_version: str
     prompt_version: str
+    direction: str
     duration_target_sec: int
+    opening_buffer_sec: int
+    closing_buffer_sec: int
     source_time_budget_sec: dict[str, int]
     constraints: PlanConstraints
     objectives: list[PlanRuntimeObjective]
+    candidate_scope: CandidateScope
+    materials: PlanSnapshot
 
 
 class PlanRead(BaseModel):

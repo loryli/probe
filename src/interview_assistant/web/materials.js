@@ -516,7 +516,6 @@ async function loadVersions() {
 }
 
 on("new-resume", "click", () => { if (canLeave()) { state.creation = {}; fillResume(null); } });
-on("welcome-new", "click", () => { state.creation = {}; fillResume(null); });
 on("refresh-resumes", "click", loadResumes);
 on("dismiss-message", "click", () => { $("message").hidden = true; });
 on("resume-form", "submit", saveResume);

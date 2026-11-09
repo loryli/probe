@@ -18,6 +18,70 @@ const formatSeconds = (value) => {
   return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
 };
 
+function randomSample(items, size) {
+  const pool = [...items];
+  for (let index = pool.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [pool[index], pool[other]] = [pool[other], pool[index]];
+  }
+  return new Set(pool.slice(0, size));
+}
+
+const planContractVersion = "planner.v2";
+
+const sameList = (left, right) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+function currentConfig() {
+  return {
+    mode: $("mode").value,
+    resume_id: $("resume-select").value,
+    source_version: Number($("version-select").value),
+    direction: $("direction").value.trim(),
+    duration_minutes: Number($("duration").value),
+    project_ratio: Number($("ratio").value) / 100,
+    max_total_followups: Number($("followups").value),
+    project_ids: [...(state.selectedProjects || [])].sort(),
+    question_ids: [...(state.selectedQuestions || [])].sort(),
+  };
+}
+
+// 配置改动后，旧结果不能被当作新配置确认；重新生成会形成新记录。
+function configDrift() {
+  const saved = state.plan?.inputs;
+  if (!saved) return false;
+  const current = currentConfig();
+  return current.mode !== saved.mode
+    || current.resume_id !== saved.resume_id
+    || current.source_version !== saved.source_version
+    || current.direction !== (saved.direction || "")
+    || current.duration_minutes !== saved.duration_minutes
+    || Math.abs(current.project_ratio - saved.project_ratio) > 0.0001
+    || current.max_total_followups !== saved.max_total_followups
+    || !sameList(current.project_ids, [...saved.project_ids].sort())
+    || !sameList(current.question_ids, [...saved.question_ids].sort());
+}
+
+function refreshConfirmState(plan = state.plan) {
+  const ready = Boolean(plan) && plan.status === "ready";
+  const outdated = ready && plan.schema_version !== planContractVersion;
+  const drift = ready && !outdated && configDrift();
+  $("confirm-plan").hidden = !ready;
+  $("confirm-plan").disabled = state.busy || outdated || drift;
+  const hint = $("config-drift");
+  hint.hidden = !outdated && !drift;
+  if (outdated) {
+    hint.textContent = "此计划由旧版规则生成，缺少运行时资料依据，无法确认；请按当前输入重新生成。";
+  } else if (drift) {
+    hint.textContent = "当前配置与这份结果不一致（或资料已变化）。请重新生成后再确认；旧结果仍可回看。";
+  }
+}
+
+function markDirty() {
+  state.dirty = true;
+  if (state.plan) refreshConfirmState();
+}
+
 class ApiError extends Error {
   constructor(message, status, code) { super(message); this.status = status; this.code = code; }
 }
@@ -71,9 +135,13 @@ function report(error) {
 
 function setBusy(value) {
   state.busy = value;
-  $("generate-plan").disabled = value;
+  // 生成期间锁定输入，避免结果对应不上界面；待查询入口保持可用。
+  for (const node of $("plan-form").querySelectorAll("input, select, button")) {
+    if (node.id === "read-pending") continue;
+    node.disabled = value;
+  }
   $("new-plan").disabled = value;
-  $("confirm-plan").disabled = value || !state.plan || state.plan.status !== "ready";
+  refreshConfirmState();
 }
 
 function startProgress() {
@@ -176,7 +244,7 @@ function renderPickers() {
         state.selectedProjects.delete(project.id);
       }
       updateCounts();
-      state.dirty = true;
+      markDirty();
     });
     const text = element("span", project.name);
     text.append(element("small", `v${project.source_version} · ${project.fact_count} 条事实 · ${project.tech_stack.join("、") || "未填技术栈"}`));
@@ -204,14 +272,14 @@ function renderPickers() {
         state.selectedQuestions.delete(question.id);
       }
       updateCounts();
-      state.dirty = true;
+      markDirty();
     });
     const text = element("span", question.question_text || "（题干为空）");
     text.append(element("small", `内容版本 v${question.content_version}`));
     label.append(input, text);
     questionBox.append(label);
   }
-  $("question-hint").textContent = `当前共有 ${options.question_total} 道启用题目，最多显示 ${options.limits.option_question_limit} 道，单次计划最多选用 ${maxQuestions} 道。`;
+  $("question-hint").textContent = `当前共有 ${options.question_total} 道启用题目，按导入顺序列出；默认从中随机选用 ${maxQuestions} 道，可点「随机重选」重新抽取或逐题调整，计划会固化本次选择。`;
   updateCounts();
 }
 
@@ -228,8 +296,8 @@ function syncPickers(settings) {
     } else {
       state.selectedProjects = new Set([...state.selectedProjects].filter((id) => projectIds.has(id)));
     }
-    if (settings.reset || state.selectedQuestions === null) {
-      state.selectedQuestions = new Set([...questionIds].slice(0, options.limits.max_questions));
+    if (settings.resetQuestions || state.selectedQuestions === null) {
+      state.selectedQuestions = randomSample([...questionIds], options.limits.max_questions);
     } else {
       state.selectedQuestions = new Set([...state.selectedQuestions].filter((id) => questionIds.has(id)));
     }
@@ -391,8 +459,9 @@ function renderPlan(plan) {
     metaTexts.push(`token ${plan.input_tokens} / ${plan.output_tokens ?? 0}`);
   }
   if (plan.prompt_version) metaTexts.push(`prompt ${plan.prompt_version}`);
+  if (plan.schema_version) metaTexts.push(`契约 ${plan.schema_version}`);
   appendMeta($("result-meta"), metaTexts);
-  $("confirm-plan").hidden = plan.status !== "ready";
+  refreshConfirmState(plan);
 
   if (plan.status === "failed" || plan.status === "running") {
     const message = plan.status === "running"
@@ -424,6 +493,13 @@ function renderPlan(plan) {
       "资料覆盖",
       `${result.coverage.questions_used}/${result.coverage.questions_total} 道题`,
       `事实 ${result.coverage.facts_used}/${result.coverage.facts_total} 条`,
+    ]);
+  }
+  if (result.candidate_scope) {
+    budgets.push([
+      "候选范围",
+      `${result.candidate_scope.question_ids.length} 道题`,
+      `事实 ${result.candidate_scope.project_fact_ids.length} 条 · 可动态选用`,
     ]);
   }
   for (const [title, value, note] of budgets) {
@@ -471,14 +547,13 @@ async function selectPlan(id) {
   try {
     const plan = await request(`${base}/${id}`);
     state.plan = plan;
-    state.pendingId = null;
     showWorkspace();
     await loadOptions(plan.resume_id, plan.source_version, { selection: plan.inputs });
     fillForm(plan.inputs);
     renderPlan(plan);
     renderPlanList();
     state.dirty = false;
-    $("read-pending").hidden = true;
+    $("read-pending").hidden = !state.pendingId;
     setBusy(false);
   } catch (error) {
     report(error);
@@ -488,14 +563,13 @@ async function selectPlan(id) {
 async function newPlan() {
   if (state.busy) return;
   state.plan = null;
-  state.pendingId = null;
   showWorkspace();
   $("plan-result").hidden = true;
   $("plan-title").textContent = "新建计划";
   $("plan-status").textContent = "未生成";
   $("generate-plan").textContent = "生成计划 ↗";
   $("delete-plan").hidden = true;
-  $("read-pending").hidden = true;
+  $("read-pending").hidden = !state.pendingId;
   $("plan-conflict").hidden = true;
   $("direction").value = "";
   $("duration").value = "45";
@@ -503,7 +577,7 @@ async function newPlan() {
   $("ratio-value").textContent = "50%";
   $("followups").value = "0";
   try {
-    await loadOptions(null, null, { reset: true });
+    await loadOptions(null, null, { reset: true, resetQuestions: true });
     renderPlanList();
     state.dirty = false;
     notify("已载入可选资料。选择项目与题目后生成计划。");
@@ -521,13 +595,21 @@ async function generate(event) {
     notify("请先选择简历与简历版本", true);
     return;
   }
+  // 随机只决定「选哪些」，提交仍按页面列表顺序，不改变题目先后。
+  const questionOrder = new Map(
+    (state.options?.questions || []).map((item, index) => [item.id, index]),
+  );
+  const selectedQuestions = [...(state.selectedQuestions || [])].sort(
+    (left, right) => (questionOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
+      - (questionOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
   const payload = {
     request_id: crypto.randomUUID(),
     mode: $("mode").value,
     resume_id: resumeId,
     source_version: version,
     project_ids: [...(state.selectedProjects || [])],
-    question_ids: [...(state.selectedQuestions || [])],
+    question_ids: selectedQuestions,
     direction: $("direction").value.trim(),
     project_ratio: Number($("ratio").value) / 100,
     duration_minutes: Number($("duration").value),
@@ -572,13 +654,15 @@ async function generate(event) {
 
 async function readPending() {
   if (!state.pendingId || state.busy) return;
+  const planId = state.pendingId;
   setBusy(true);
   try {
-    const plan = await request(`${base}/${state.pendingId}`);
+    const plan = await request(`${base}/${planId}`);
     state.plan = plan;
-    state.pendingId = null;
-    $("read-pending").hidden = true;
-    state.dirty = false;
+    // 仍在生成时保留待查询标识，允许稍后继续读取同一任务。
+    if (plan.status !== "running") state.pendingId = null;
+    $("read-pending").hidden = !state.pendingId;
+    if (plan.status !== "running") state.dirty = false;
     renderPlan(plan);
     await loadPlans();
   } catch (error) {
@@ -631,7 +715,6 @@ async function deletePlan() {
 }
 
 $("new-plan").addEventListener("click", newPlan);
-$("welcome-start").addEventListener("click", newPlan);
 $("refresh-plans").addEventListener("click", async () => {
   try { await loadPlans(); } catch (error) { report(error); }
 });
@@ -647,39 +730,43 @@ $("dismiss-message").addEventListener("click", () => { $("message").hidden = tru
 $("plan-form").addEventListener("submit", generate);
 $("plan-form").addEventListener("input", (event) => {
   if (event.target.id === "ratio") $("ratio-value").textContent = `${event.target.value}%`;
-  state.dirty = true;
+  markDirty();
 });
 $("resume-select").addEventListener("change", async () => {
   try {
     await loadOptions($("resume-select").value, null, { reset: true });
-    state.dirty = true;
+    markDirty();
   } catch (error) { report(error); }
 });
 $("version-select").addEventListener("change", async () => {
   try {
     await loadOptions($("resume-select").value, Number($("version-select").value), { reset: true });
-    state.dirty = true;
+    markDirty();
   } catch (error) { report(error); }
 });
 $("project-all").addEventListener("click", () => {
   state.selectedProjects = new Set(state.options.projects.slice(0, state.options.limits.max_projects).map((item) => item.id));
   renderPickers();
-  state.dirty = true;
+  markDirty();
 });
 $("project-none").addEventListener("click", () => {
   state.selectedProjects = new Set();
   renderPickers();
-  state.dirty = true;
+  markDirty();
 });
 $("question-all").addEventListener("click", () => {
-  state.selectedQuestions = new Set(state.options.questions.slice(0, state.options.limits.max_questions).map((item) => item.id));
+  state.selectedQuestions = randomSample(
+    state.options.questions.map((item) => item.id),
+    state.options.limits.max_questions,
+  );
   renderPickers();
-  state.dirty = true;
+  markDirty();
+  notify(`已随机选用 ${state.selectedQuestions.size} 道启用题目，可在下方逐题调整。`);
 });
 $("question-none").addEventListener("click", () => {
   state.selectedQuestions = new Set();
   renderPickers();
-  state.dirty = true;
+  markDirty();
 });
 $("read-pending").addEventListener("click", readPending);
 $("confirm-plan").addEventListener("click", confirmPlan);

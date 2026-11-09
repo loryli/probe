@@ -276,6 +276,14 @@ def test_migration_round_trip_and_model_consistency(bank):
             "question_metadata",
             "markdown_import",
             "question_import_source",
+            "resume_document",
+            "resume_extraction",
+            "resume",
+            "resume_version",
+            "resume_parse_draft",
+            "project",
+            "project_fact",
+            "interview_plan",
         }
 
 

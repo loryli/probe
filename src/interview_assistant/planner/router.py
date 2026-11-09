@@ -86,7 +86,7 @@ async def get_plan(
 
 
 @router.get("/{plan_id}/runtime", response_model=PlanRuntime,
-            summary="读取已确认计划的精简运行时投影，供实时与语音链路直接使用")
+            summary="读取已确认新版计划的目标、候选范围与完整资料快照，不调用模型")
 async def plan_runtime(
     plan_id: UUID, session: SessionDependency, settings: SettingsDependency,
 ) -> PlanRuntime:

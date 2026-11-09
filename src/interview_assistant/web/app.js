@@ -103,7 +103,7 @@ function updateSaveState() {
 function setBusy(busy) {
   state.busy = busy;
   for (const input of Object.values(inputs)) input.disabled = busy;
-  for (const id of ["is-active", "new-question", "welcome-new", "import-markdown", "delete-question", "reload-current", "search", "active-filter", "refresh"]) {
+  for (const id of ["is-active", "new-question", "import-markdown", "delete-question", "reload-current", "search", "active-filter", "refresh"]) {
     $(id).disabled = busy;
   }
   $("history-tab").disabled = busy || state.isNew || !state.selected;
@@ -377,7 +377,6 @@ async function checkConnection() {
 }
 
 on("new-question", "click", newQuestion);
-on("welcome-new", "click", newQuestion);
 on("question-form", "submit", saveQuestion);
 on("delete-question", "click", deleteQuestion);
 on("reload-current", "click", () => state.selected && selectQuestion(state.selected.id));

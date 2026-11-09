@@ -22,7 +22,7 @@
 - 面试时由统一 Interview Agent 根据回答动态追问；实时响应不等待深度分析。
 - V1 先可靠地记录结构化证据，能力模型随使用逐渐演进。
 - 首发方向为大模型应用开发 / AI 全栈；第一版先做文字面试，语音留到后续优化延迟后接入。
-- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、MySQL、SSE；LangGraph、Redis、向量库按实际需要引入。
+- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、SSE；本地开发默认 SQLite，保留 MySQL，LangGraph、Redis、向量库按实际需要引入；页面使用同源原生 HTML/CSS/JS。
 
 ## 决策状态
 

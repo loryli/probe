@@ -118,7 +118,7 @@ class QwenModel:
         except httpx2.HTTPError:
             raise ModelError("model_connection_failed", "无法连接 Qwen，请检查网络及接口地址") from None
         except (ValueError, ValidationError):
-            raise ModelError("model_invalid_output", "模型结果未通过 JSON 结构校验，本次未写入项目") from None
+            raise ModelError("model_invalid_output", "模型结果未通过 JSON 结构校验，本次未保存结果") from None
         finally:
             self.elapsed_ms = round((time.monotonic() - started) * 1000)
             logger.info("Model call finished; provider=qwen prompt=%s schema=%s elapsed_ms=%d",
