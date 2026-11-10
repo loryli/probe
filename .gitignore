@@ -16,3 +16,11 @@ build/
 dist/
 data/
 
+# Node / Vue frontend
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+

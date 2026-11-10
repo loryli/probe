@@ -13,6 +13,8 @@
 5. [Prompt、结构化输出与 API 草案](./04-AI契约与API草案.md)
 6. [开发阶段与验收标准](./05-开发计划与验收标准.md)
 
+前端选型、后端契约调查与新版体验设计见 [前端选型与体验方案](./design/FRONTEND_SELECTION_AND_UX.md)，迁移顺序见 [前端重设计与迁移路线](./design/REDESIGN_ROADMAP.md)。早期原生页面视觉与 UX 方案效果未获认可，已降为历史参考；业务边界与数据保护原则继续有效。
+
 ## 核心产品原则
 
 - 个人自用优先，优先让自己愿意反复使用。
@@ -22,7 +24,7 @@
 - 面试时由统一 Interview Agent 根据回答动态追问；实时响应不等待深度分析。
 - V1 先可靠地记录结构化证据，能力模型随使用逐渐演进。
 - 首发方向为大模型应用开发 / AI 全栈；第一版先做文字面试，语音留到后续优化延迟后接入。
-- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、SSE；本地开发默认 SQLite，保留 MySQL，LangGraph、Redis、向量库按实际需要引入；页面使用同源原生 HTML/CSS/JS。
+- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、SSE；本地开发默认 SQLite，保留 MySQL，LangGraph、Redis、向量库按实际需要引入。前端已确认转为独立工程：开发服务器代理 FastAPI，生产构建由 FastAPI 同源托管。迁移路线见 [前端重设计与迁移路线](design/REDESIGN_ROADMAP.md)。
 
 ## 决策状态
 

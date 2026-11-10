@@ -1,0 +1,105 @@
+:where(.materials-page) .materials-rail { min-width: 0; display: flex; flex-direction: column;    }
+:where(.materials-page) .resume-choice { width: 100%; display: flex; align-items: flex-start; gap: 9px; padding: 10px 8px; border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
+:where(.materials-page) .resume-choice:hover, :where(.materials-page) .resume-choice.active { background: #edf1e7; }
+:where(.materials-page) .resume-symbol { width: 26px; height: 30px; display: grid; flex: 0 0 26px; place-items: center; border: 1px solid #dfe5d9; border-radius: 5px; background: #fff; color: #738450; font: 10px var(--mono); }
+:where(.materials-page) .resume-choice > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+:where(.materials-page) .resume-choice strong { overflow: hidden; color: #556052; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+:where(.materials-page) .resume-choice small { color: #9ba39a; font-size: 10px; }
+:where(.materials-page) .add-resume { align-self: flex-start; margin: 7px 0 18px; }
+:where(.materials-page) .version-rail { display: grid; gap: 4px; padding-top: 14px; border-top: 1px solid #e5e9e2; }
+:where(.materials-page) .version-rail > p { margin-bottom: 4px; }
+:where(.materials-page) .version-rail button { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 5px; padding: 7px; border: 0; border-radius: 5px; background: transparent; color: #758071; text-align: left; cursor: pointer; }
+:where(.materials-page) .version-rail button.current { background: #edf2e6; color: #556943; }
+:where(.materials-page) .version-rail button span { font: 9px var(--mono); }
+:where(.materials-page) .version-rail button small { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+:where(.materials-page) .version-rail button i { color: #92a76a; font-size: 10px; font-style: normal; }
+:where(.materials-page) .materials-main { min-width: 0;  }
+:where(.materials-page) .material-overview { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding-bottom: 21px; border-bottom: 1px solid #e9ede6; }
+:where(.materials-page) .material-overview h2, :where(.materials-page) .section-title h2 { margin: 5px 0; color: #334035; font-size: 23px; letter-spacing: -.05em; }
+:where(.materials-page) .material-overview p:last-child { margin: 5px 0 0; color: #939b91; font-size: 11px; }
+:where(.materials-page) .material-overview p span { padding: 0 5px; }
+:where(.materials-page) .overview-actions { display: flex; align-items: center; gap: 10px; }
+:where(.materials-page) .project-workspace { padding-top: 23px; }
+:where(.materials-page) .section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+:where(.materials-page) .section-title h2 small { margin-left: 5px; color: #96a08e; font-size: 11px; font-weight: 500; letter-spacing: 0; }
+:where(.materials-page) .project-actions { display: flex; gap: 6px; }
+:where(.materials-page) .candidate-review { margin: 16px 0; padding: 13px; border: 1px solid #e7e5d7; border-radius: 8px; background: #fbfaf3; }
+:where(.materials-page) .candidate-review-title { display: flex; align-items: flex-start; justify-content: space-between; }
+:where(.materials-page) .candidate-review-title > span { display: flex; flex-direction: column; gap: 4px; }
+:where(.materials-page) .candidate-review-title b { color: #666349; font-size: 12px; }
+:where(.materials-page) .candidate-review-title small { color: #a29d7b; font-size: 10px; }
+:where(.materials-page) .ai-candidate { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 0 7px; border-top: 1px solid #eeecdf; }
+:where(.materials-page) .ai-candidate > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+:where(.materials-page) .ai-candidate strong { color: #59604a; font-size: 12px; }
+:where(.materials-page) .ai-candidate span { color: #a29d7b; font-size: 10px; }
+:where(.materials-page) .ai-candidate blockquote { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid #d8d3b4; color: #847f66; font-size: 11px; line-height: 1.6; }
+:where(.materials-page) .project-list { display: grid; gap: 10px; margin-top: 17px; }
+:where(.materials-page) .project-card { padding: 15px; border: 1px solid #e4e9e0; border-radius: 9px; background: #fff; cursor: pointer; transition: border-color .15s, background .15s; }
+:where(.materials-page) .project-card:hover, :where(.materials-page) .project-card.selected { border-color: #cfdcc0; background: #fcfdf9; }
+:where(.materials-page) .project-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+:where(.materials-page) .project-card-head h3 { margin: 5px 0; color: #3e4b40; font-size: 14px; }
+:where(.materials-page) .project-state { padding: 3px 6px; border-radius: 4px; background: #f5f0e7; color: #967b4e; font-size: 10px; }
+:where(.materials-page) .project-state.verified { background: #edf3e3; color: #698242; }
+:where(.materials-page) .source-version { color: #9aa294; font: 8px var(--mono); }
+:where(.materials-page) .project-card > p { color: #7a857b; font-size: 12px; line-height: 1.8; white-space: pre-wrap; }
+:where(.materials-page) .tech-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+:where(.materials-page) .tech-tags span { padding: 4px 6px; border-radius: 4px; background: #f1f3ee; color: #788276; font: 8px var(--mono); }
+:where(.materials-page) .project-facts { display: grid; gap: 6px; margin-top: 11px; }
+:where(.materials-page) .project-facts > div { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding-top: 7px; border-top: 1px solid #eff1ed; }
+:where(.materials-page) .project-facts b { color: #85917b; font-size: 10px; }
+:where(.materials-page) .project-facts span { color: #6b766b; font-size: 11px; line-height: 1.6; }
+:where(.materials-page) .project-facts small { color: #a1aa9a; font-size: 10px; }
+:where(.materials-page) .project-facts > button { justify-self: end; }
+:where(.materials-page) .project-editor, :where(.materials-page) .resume-editor { margin-top: 16px; padding: 16px; border: 1px solid #dfe6d9; border-radius: 9px; background: #f9faf6; }
+:where(.materials-page) .editor-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; color: #586554; font-size: 12px; }
+:where(.materials-page) .project-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+:where(.materials-page) .project-fields label { display: grid; gap: 4px; color: #818b7e; font-size: 10px; }
+:where(.materials-page) .project-fields input, :where(.materials-page) .project-fields textarea, :where(.materials-page) .material-input { width: 100%; padding: 8px 9px; border: 1px solid #e1e6de; border-radius: 5px; background: #fff; color: #465247; font: 10px/1.65 system-ui, sans-serif; }
+:where(.materials-page) .project-fields .full-field { grid-column: 1 / -1; }
+:where(.materials-page) .project-fields textarea { resize: vertical; }
+:where(.materials-page) .facts-editor { margin-top: 12px; }
+:where(.materials-page) .fact-edit { position: relative; display: grid; grid-template-columns: 88px 1fr 1fr 24px; gap: 5px; margin-bottom: 6px; }
+:where(.materials-page) .fact-edit input, :where(.materials-page) .fact-edit textarea { min-width: 0; padding: 7px; border: 1px solid #e3e7e0; border-radius: 5px; background: white; color: #657064; font: 9px/1.6 system-ui, sans-serif; resize: vertical; }
+:where(.materials-page) .fact-edit textarea { min-height: 48px; }
+:where(.materials-page) .remove-fact { border: 0; background: none; color: #a87b6d; cursor: pointer; }
+:where(.materials-page) .verified-choice { display: inline-flex; align-items: center; gap: 6px; margin: 7px 0; color: #788373; font-size: 11px; }
+:where(.materials-page) .editor-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 11px; padding-top: 10px; border-top: 1px solid #e7ebe3; color: #9ba396; font-size: 10px; }
+:where(.materials-page) .no-projects { padding: 50px 15px; border: 1px dashed #dce3d5; border-radius: 8px; color: #667360; text-align: center; }
+:where(.materials-page) .no-projects p { color: #9aa296; font-size: 12px; }
+:where(.materials-page) .resume-editor { margin: 0; padding: 0; border: 0; background: none; }
+:where(.materials-page) .resume-editor .section-title { margin-bottom: 18px; }
+:where(.materials-page) .resume-editor .section-title h2 { font-size: 19px; }
+:where(.materials-page) .material-input { min-height: 37px; }
+:where(.materials-page) .resume-text-editor { width: 100%; min-height: 40vh; padding: 12px; border: 1px solid #dfe5dc; border-radius: 7px; background: #fdfefc; color: #465147; font: 10px/1.8 ui-monospace, monospace; resize: vertical; }
+:where(.materials-page) .file-source, :where(.materials-page) .extract-summary { display: flex; align-items: center; gap: 12px; padding: 8px 0; color: #818b7e; font-size: 11px; }
+:where(.materials-page) .file-source a { margin-left: auto; color: #788a56; }
+:where(.materials-page) .extract-summary { flex-wrap: wrap; padding: 9px; border-radius: 6px; background: #f4f6ef; }
+:where(.materials-page) .extract-summary b { color: #627247; }
+:where(.materials-page) .extract-summary small { color: #aa7e61; }
+:where(.materials-page) .editor-toolbar label { display: flex; align-items: center; gap: 5px; }
+:where(.materials-page) .editor-toolbar select { padding: 5px; border: 1px solid #e0e5dc; border-radius: 4px; color: #778173; font-size: 10px; }
+:where(.materials-page) .version-preview { margin: 12px 0; padding: 12px; border: 1px solid #e2e8dc; border-radius: 7px; background: #f7f9f3; }
+:where(.materials-page) .version-preview > div { display: flex; justify-content: space-between; color: #647054; font-size: 12px; }
+:where(.materials-page) .version-preview pre { max-height: 280px; overflow: auto; color: #687369; font: 9px/1.7 system-ui, sans-serif; white-space: pre-wrap; }
+:where(.materials-page) .materials-empty { width: min(540px, 100%); margin: 50px auto; }
+:where(.materials-page) .materials-empty h2 { margin: 12px 0; color: #354238; font-size: 38px; line-height: 1.4; letter-spacing: -.07em; }
+:where(.materials-page) .materials-empty p { max-width: 380px; margin-bottom: 20px; color: #818b82; font-size: 11px; line-height: 1.8; }
+@media (max-width: 820px) {
+:where(.materials-page) .materials-rail { max-height: 230px;   }
+:where(.materials-page) .version-rail { display: flex; flex-wrap: wrap; }
+:where(.materials-page) .version-rail > p { width: 100%; }
+:where(.materials-page) .materials-main { min-height: 420px;  } }
+@media (max-width: 520px) {
+:where(.materials-page) .materials-main {  }
+:where(.materials-page) .material-overview, :where(.materials-page) .section-title { align-items: flex-start; flex-direction: column; }
+:where(.materials-page) .project-actions { width: 100%; }
+:where(.materials-page) .project-actions > * { flex: 1; }
+:where(.materials-page) .project-fields { grid-template-columns: 1fr; }
+:where(.materials-page) .project-fields .full-field { grid-column: auto; }
+:where(.materials-page) .fact-edit { grid-template-columns: 65px 1fr 24px; }
+:where(.materials-page) .fact-edit textarea:nth-of-type(2) { grid-column: 2; }
+:where(.materials-page) .fact-edit .remove-fact { grid-column: 3; grid-row: 1 / span 2; }
+:where(.materials-page) .project-facts > div { grid-template-columns: 42px minmax(0, 1fr); }
+:where(.materials-page) .project-facts small { grid-column: 2; }
+:where(.materials-page) .editor-toolbar { align-items: flex-start; flex-wrap: wrap; }
+:where(.materials-page) .material-overview h2 { font-size: 19px; } }
