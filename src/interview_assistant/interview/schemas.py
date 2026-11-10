@@ -40,6 +40,19 @@ class SessionControl(InputModel):
     expected_revision: int = Field(ge=1)
 
 
+class SessionBatchDelete(InputModel):
+    """批量删除面试记录：物理删除场次、全部轮次与复盘，不可恢复。"""
+
+    session_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+    @field_validator("session_ids")
+    @classmethod
+    def unique_sessions(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("同一场次不能重复提交")
+        return value
+
+
 class DecisionDraft(InputModel):
     """模型只做本轮判断与措辞；是否追问、切目标与收尾由服务端按配额决定。
 

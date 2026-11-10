@@ -7,10 +7,13 @@ from fastapi.responses import JSONResponse
 from interview_assistant.api.dependencies import SessionDependency
 from interview_assistant.question_bank.schemas import (
     CategoryAssignment,
+    CategoryBatchDelete,
     CategoryCreate,
     CategoryList,
     CategoryRead,
     CategoryRename,
+    DeleteResult,
+    QuestionBatchDelete,
     QuestionCreate,
     QuestionHistory,
     QuestionList,
@@ -119,6 +122,18 @@ async def delete_question(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post(
+    "/batch-delete",
+    response_model=DeleteResult,
+    summary="批量逻辑删除题目；任何一道版本不符则整体不删除",
+)
+async def batch_delete_questions(
+    payload: QuestionBatchDelete, session: SessionDependency
+) -> DeleteResult:
+    deleted = await QuestionService(session).delete_batch(payload)
+    return DeleteResult(deleted=deleted)
+
+
 @router.get("/{question_id}/versions", response_model=QuestionHistory, summary="分页查看内容历史")
 async def list_versions(
     question_id: UUID, session: SessionDependency, limit: Limit = 50, offset: Offset = 0
@@ -169,3 +184,15 @@ async def classify_questions(
     payload: CategoryAssignment, session: SessionDependency,
 ) -> list[QuestionRead]:
     return await CategoryService(session).assign(payload)
+
+
+@category_router.post(
+    "/batch-delete",
+    response_model=DeleteResult,
+    summary="批量删除空分类；仍有题目的分类会被拒绝，任一失败则整体不删除",
+)
+async def batch_delete_categories(
+    payload: CategoryBatchDelete, session: SessionDependency,
+) -> DeleteResult:
+    deleted = await CategoryService(session).delete_batch(payload)
+    return DeleteResult(deleted=deleted)

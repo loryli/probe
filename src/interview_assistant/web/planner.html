@@ -4,81 +4,174 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="description" content="练习场：按简历版本、项目事实与个人题库规划面试目标与时间预算。">
   <title>面试计划 · 练习场</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/planner.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/theme.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/workspace.css?v=20261110-4">
-  <script src="/assets/planner.js?v=20261110-4" type="module"></script>
+  <link rel="stylesheet" href="/assets/tokens.css">
+  <link rel="stylesheet" href="/assets/base.css">
+  <link rel="stylesheet" href="/assets/typography.css">
+  <link rel="stylesheet" href="/assets/layout.css">
+  <link rel="stylesheet" href="/assets/components.css">
+  <link rel="stylesheet" href="/assets/workspace-ui.css?v=20261110-7">
+  <link rel="stylesheet" href="/assets/planner.css?v=20261110-7">
+  <script src="/assets/planner.js?v=20261110-7" type="module"></script>
 </head>
-<body class="planner-page">
-  <a class="skip-link" href="#main">跳到主内容</a>
+<body class="ds-root ws-page planner-page">
+  <a class="ds-skip" href="#main">跳到主内容</a>
+  <header class="ds-container ds-topbar app-topbar">
+    <a class="app-brand" href="/" aria-label="练习场首页"><img src="/assets/favicon.svg" width="32" height="32" alt=""><span>练习场</span></a>
+    <nav class="app-navigation" aria-label="工作区导航"><a href="/">个人题库</a><a href="/materials">简历与项目</a><a href="/planner" aria-current="page">面试计划</a><a href="/interview">模拟面试</a></nav>
+    <span class="connection" id="connection" role="status">正在读取资料</span>
+  </header>
 
-    <header class="topbar app-topbar">
-      <a class="app-brand" href="/" aria-label="练习场首页"><img src="/assets/favicon.svg" width="32" height="32" alt=""><span>练习场</span></a>
-      <nav class="app-navigation" aria-label="工作区导航"><a href="/">个人题库</a><a href="/materials">简历与项目</a><a href="/planner" aria-current="page">面试计划</a><a href="/interview">模拟面试</a></nav>
-      <span class="connection" id="connection" role="status">正在读取资料</span>
-    </header>
-  <main id="main">
-    <div class="page">
-      <section class="page-heading"><div><div class="eyebrow">PLAN BEFORE YOU PRACTICE</div><h1>面试计划<span class="title-dot">.</span></h1><p>选定资料版本，规划考察目标与题源节奏。</p></div><button class="button primary" id="new-plan" type="button">＋ 新建计划</button></section>
-      <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" type="button" aria-label="关闭提示">×</button></div>
-      <section class="bank" aria-label="面试计划">
-        <div class="question-column">
-          <div class="list-heading"><h2>计划记录 <span id="plan-count">—</span></h2><button class="text-button" id="refresh-plans" type="button">刷新</button></div>
-          <p class="material-help">每次生成形成一条独立记录。确认后固定，重新生成不覆盖历史。</p>
-          <div id="plan-list" class="question-list" aria-live="polite"><p class="list-placeholder">正在读取计划…</p></div>
-          <div class="pagination"><button class="text-button" id="plan-previous" type="button" disabled>← 上一页</button><span id="plan-page">第 1 页</span><button class="text-button" id="plan-next" type="button" disabled>下一页 →</button></div>
-        </div>
-        <div class="editor-column">
-          <section class="welcome" id="planner-welcome"><span class="eyebrow">GOALS, NOT A FIXED SCRIPT</span><h2>先定考察方向</h2><p>选择简历版本、已核对项目与启用题库，<br>生成可调整的考察目标与时间预算。</p><small>点击右上角「新建计划」开始配置；不生成固定问题清单，目标时长只是节奏参考。</small></section>
-          <section id="planner-workspace" hidden aria-labelledby="plan-title">
-            <div class="editor-heading"><div><div class="eyebrow">PERSONALIZED PLANNER</div><h2 id="plan-title">新建计划</h2></div><span class="save-state" id="plan-status">未生成</span></div>
-            <div class="record-actions" aria-label="计划操作"><span id="plan-mode" class="record-mode">查看计划</span><button id="edit-plan" class="button" type="button">调整配置</button><button id="cancel-plan" class="button" type="button" hidden>取消</button><button form="plan-form" class="button primary" id="generate-plan" type="submit">生成计划 ↗</button><button class="button" id="read-pending" type="button" hidden>读取本次结果</button><button class="text-button danger" id="delete-plan" type="button" hidden>删除计划</button></div>
-            <section id="plan-record-view" class="record-detail" aria-label="计划配置" hidden></section>
-            <form id="plan-form" class="material-form planner-form">
+  <main id="main" class="page ds-container">
+    <section class="page-heading">
+      <div>
+        <span class="eyebrow">GOALS, NOT A FIXED SCRIPT</span>
+        <h1 class="ds-title">面试计划<span class="title-dot">.</span></h1>
+        <p class="ds-caption">先选训练依据，再规划考察目标与时间预算。</p>
+      </div>
+      <button id="new-plan" class="ds-button ds-button--primary" type="button">＋ 新建计划</button>
+    </section>
+
+    <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" type="button" aria-label="关闭提示">×</button></div>
+
+    <!-- 视图一：计划目录 -->
+    <section id="plan-directory" class="plan-directory" aria-label="计划记录">
+      <div class="list-heading"><h2>计划记录 <span id="plan-count" class="count">—</span></h2><button id="refresh-plans" class="text-button" type="button">刷新</button></div>
+      <p class="directory-note">每次生成保存为独立记录。计划确认后固定引用生成时的资料快照，之后修改题库或简历不会改变已确认计划。</p>
+      <section id="planner-welcome" class="welcome ds-empty" hidden>
+        <h2 class="ds-heading">为下一场练习定个方向</h2>
+        <p class="ds-caption">选定简历版本、已核对项目和个人题库，逐步形成可核对的目标与时间预算。</p>
+        <button id="welcome-plan" class="ds-button" type="button">创建第一份计划</button>
+      </section>
+      <div id="plan-list" class="plan-list" aria-live="polite"><p class="list-placeholder">正在读取计划…</p></div>
+      <div class="pagination"><button id="plan-previous" class="text-button" type="button" disabled>← 上一页</button><span id="plan-page">第 1 页</span><button id="plan-next" class="text-button" type="button" disabled>下一页 →</button></div>
+    </section>
+
+    <!-- 视图二：计划详情 / 视图三：创建（分步） -->
+    <section id="planner-workspace" class="planner-workspace" hidden aria-labelledby="plan-title">
+      <button id="back-to-plans" class="text-button back-to-plans" type="button">← 返回计划记录</button>
+      <header class="editor-heading">
+        <div><span class="eyebrow">PERSONALIZED PLANNER</span><h2 id="plan-title" class="ds-heading" tabindex="-1">新建计划</h2><p id="plan-subtitle" class="workspace-meta"></p></div>
+        <span id="plan-status" class="ds-badge">未生成</span>
+      </header>
+      <div class="record-actions" aria-label="计划操作">
+        <span id="plan-mode" class="record-mode">查看计划</span>
+        <button id="read-pending" class="ds-button ds-button--small" type="button" hidden>读取本次结果</button>
+        <button id="edit-plan" class="ds-button ds-button--small" type="button">调整配置，生成新计划</button>
+        <button id="cancel-plan" class="text-button" type="button" hidden>取消调整</button>
+        <button id="delete-plan" class="text-button danger" type="button" hidden>删除计划</button>
+      </div>
+      <div id="plan-conflict" class="conflict-actions" role="status" hidden><p>资料或计划已变化，原结果和当前配置已保留。请重新生成后再确认。</p><button id="reload-plan" class="ds-button" type="button">仅读取最新计划状态</button></div>
+
+      <section id="plan-record-view" class="record-detail" aria-label="计划固定配置" hidden></section>
+
+      <div class="wizard-layout">
+        <nav id="wizard-nav" class="wizard-nav" aria-label="创建计划步骤" hidden>
+          <p id="wizard-position" class="wizard-position">第 1 / 4 步 · 训练依据</p>
+          <button id="wizard-steps-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="wizard-steps">步骤目录</button>
+          <ol id="wizard-steps" class="wizard-steps">
+            <li><button type="button" data-plan-step="1"><span class="step-number">01</span><span class="step-label">训练依据</span></button></li>
+            <li><button type="button" data-plan-step="2"><span class="step-number">02</span><span class="step-label">题库范围</span></button></li>
+            <li><button type="button" data-plan-step="3"><span class="step-number">03</span><span class="step-label">方向与节奏</span></button></li>
+            <li><button type="button" data-plan-step="4"><span class="step-number">04</span><span class="step-label">预览与确认</span></button></li>
+          </ol>
+          <p class="wizard-draft-note">前 3 步只保留本页配置，不写库、不调用模型；点击「生成计划」才提交。</p>
+        </nav>
+
+        <div class="wizard-content">
+          <p id="generate-progress" class="generation-progress" role="status" hidden></p>
+          <form id="plan-form" class="planner-form" novalidate>
+            <section id="wizard-step-1" class="wizard-step" data-wizard-section="1" aria-labelledby="step-title-1">
+              <h3 id="step-title-1" class="step-title" tabindex="-1">选择训练依据</h3>
+              <p class="step-description">固定一个简历版本，再选择这份版本下已核对的项目。计划确认后会一直引用这份快照。</p>
               <div class="material-row">
                 <div class="field"><label for="resume-select">简历 <span class="required">*</span></label><select id="resume-select" required></select></div>
                 <div class="field"><label for="version-select">简历版本 <span class="required">*</span></label><select id="version-select" required></select></div>
               </div>
-              <p class="material-help" id="version-hint">计划固定引用所选版本；项目只显示该版本中已核对的条目。</p>
+              <p id="version-hint" class="material-help"></p>
+              <p id="no-resume-hint" class="review-banner" hidden>当前需要先保存一份简历才能创建计划。<a href="/materials">前往准备简历</a></p>
+              <details class="planner-picker" id="project-picker" open>
+                <summary>已核对项目 <span id="project-selected-count" class="picker-count">0</span></summary>
+                <div class="picker-tools"><span>最多 8 个；只列出所选简历版本下已核对的项目。</span><button type="button" class="text-button" id="project-all">全选</button><button type="button" class="text-button" id="project-none">全不选</button></div>
+                <div id="project-options" class="picker-list"></div>
+              </details>
+              <p class="material-help">可以不选项目，下一步选择题库训练；当前计划仍需绑定一个简历版本。</p>
+            </section>
+
+            <section id="wizard-step-2" class="wizard-step" data-wizard-section="2" aria-labelledby="step-title-2" hidden>
+              <h3 id="step-title-2" class="step-title" tabindex="-1">选择个人题库范围</h3>
+              <p class="step-description">这些题目是候选资料，不是本场固定必问题单。切换步骤会保留本次勾选。</p>
+              <details class="planner-picker" id="question-picker" open>
+                <summary>启用题库 <span id="question-selected-count" class="picker-count">0</span></summary>
+                <div class="picker-tools"><span id="question-hint">最多 40 道。</span><button type="button" class="text-button" id="question-all">随机重选 40 道</button><button type="button" class="text-button" id="question-none">全不选</button></div>
+                <div id="question-options" class="picker-list"></div>
+              </details>
+            </section>
+
+            <section id="wizard-step-3" class="wizard-step" data-wizard-section="3" aria-labelledby="step-title-3" hidden>
+              <h3 id="step-title-3" class="step-title" tabindex="-1">安排方向与节奏</h3>
+              <p class="step-description">目标由 Planner 根据资料规划；这里填写希望训练的方向与时间预算。</p>
+              <p id="selection-summary" class="selection-summary"></p>
               <div class="field"><label for="direction">考察方向 <span class="field-hint">可留空，默认按首发方向</span></label><input id="direction" maxlength="500" placeholder="例如：RAG 检索链路、Agent 状态管理、SQL 安全"></div>
               <div class="material-row">
                 <div class="field"><label for="duration">预计时长（分钟）</label><input id="duration" type="number" min="10" max="180" step="5" value="45" required></div>
-                <div class="field"><label for="ratio">项目题时间比例 <span class="field-hint" id="ratio-value">50%</span></label><input id="ratio" type="range" min="0" max="100" step="5" value="50"><p class="material-help">剩余时间分配给题库题；比例按时间近似控制。</p></div>
+                <div class="field"><label for="ratio">项目题时间比例 <span id="ratio-value" class="field-hint">50%</span></label><input id="ratio" type="range" min="0" max="100" step="5" value="50"><p class="material-help">其余时间分给题库题；比例按时间安排，资料不足时以生成结果为准。</p></div>
               </div>
-              <div class="material-row">
-                <div class="field"><label for="followups">追问总上限 <span class="field-hint">0 = 自动</span></label><input id="followups" type="number" min="0" max="30" value="0"></div>
-                <div class="field"><label for="mode">生成方式</label><select id="mode"><option value="model">Qwen 模型规划</option><option value="rule">规则模式（不调用模型）</option></select><p class="material-help" id="model-status">正在读取模型配置…</p></div>
-              </div>
-              <details class="planner-picker" id="project-picker" open><summary>已核对项目 <span id="project-selected-count">0</span></summary><div class="picker-tools"><span>最多 8 个；只列出所选简历版本下已核对的项目。</span><button type="button" class="text-button" id="project-all">全选</button><button type="button" class="text-button" id="project-none">全不选</button></div><div id="project-options" class="picker-list"></div></details>
-              <details class="planner-picker" id="question-picker"><summary>启用题库 <span id="question-selected-count">0</span></summary><div class="picker-tools"><span id="question-hint">最多 40 道。</span><button type="button" class="text-button" id="question-all">随机重选 40 道</button><button type="button" class="text-button" id="question-none">全不选</button></div><div id="question-options" class="picker-list"></div></details>
-              <p class="material-help">仅发送已核对项目事实与启用题干；不发送简历全文、标准答案或复习笔记。计划不生成固定问题清单，也不改写任何资料。</p>
-              <div class="conflict-actions" id="plan-conflict" hidden><p>资料或计划已变化，当前输入已保留。请重新生成计划后再确认。</p><button class="button" id="reload-plan" type="button">读取最新计划</button></div>
-              <p id="generate-progress" class="material-help" role="status" hidden></p>
-              <footer class="editor-actions"><span class="original-note" id="plan-meta">目标时长仅作节奏参考，到时不强制结束。</span></footer>
-            </form>
-            <section id="plan-result" class="planner-result" hidden aria-live="polite" aria-labelledby="result-title">
-              <div class="project-toolbar"><h3 id="result-title">计划结果</h3><span class="save-state" id="result-state"></span></div>
-              <p id="result-summary" class="result-summary"></p>
-              <div id="result-meta" class="result-meta"></div>
-              <div id="result-budgets" class="budget-grid"></div>
-              <h4>考察目标 <span class="section-hint">每个目标可展开核对引用原文与运行时上下文</span></h4><div id="result-objectives" class="objective-list"></div>
-              <h4>约束与提示 <span class="section-hint">按来源区分，模型提示未经核验</span></h4>
-              <div class="note-groups">
-                <section class="note-group"><h5>系统校验与统计</h5><ul id="notes-system" class="result-limitations"></ul></section>
-                <section class="note-group model"><h5>模型提示 · 未经核验</h5><ul id="notes-model" class="result-limitations"></ul></section>
-                <section class="note-group"><h5>产品规则</h5><ul id="notes-policy" class="result-limitations"></ul></section>
-              </div>
-              <p class="material-help" id="config-drift" role="status" hidden></p>
-              <footer class="editor-actions"><span class="original-note" id="result-note">确认前请核对目标与引用；确认后计划固定。</span><button class="button primary" id="confirm-plan" type="button" hidden>确认保存计划 ↗</button></footer>
+              <div class="field"><label for="mode">生成方式</label><select id="mode"><option value="model">Qwen 模型规划</option><option value="rule">规则模式 · 不调用模型</option></select><p id="model-status" class="material-help"></p></div>
+              <details class="advanced-config"><summary>追问边界</summary><div class="field"><label for="followups">追问总上限 <span class="field-hint">0 = 自动</span></label><input id="followups" type="number" min="0" max="30" value="0"></div></details>
+              <p class="material-help">仅发送已核对项目事实与启用题干，不发送简历全文、标准答案或复习笔记。不改写原始资料。</p>
             </section>
+
+            <section id="wizard-step-4" class="wizard-step" data-wizard-section="4" aria-labelledby="step-title-4" hidden>
+              <h3 id="step-title-4" class="step-title" tabindex="-1">预览并生成</h3>
+              <p class="step-description">核对本次提交的资料与节奏，再点击「生成计划」。生成会保存一条新记录，模型模式会产生一次调用。</p>
+              <dl id="review-summary" class="review-summary"></dl>
+              <p id="review-note" class="review-note">生成完成后在这里预览目标、预算与引用；确认之前计划不会用于面试。</p>
+            </section>
+
+            <footer class="wizard-actions">
+              <span id="plan-meta" class="original-note">目标时长用于安排练习节奏，到时不强制结束。</span>
+              <div class="ds-cluster">
+                <button id="wizard-previous" class="ds-button" type="button" hidden>上一步</button>
+                <button id="wizard-next" class="ds-button ds-button--primary" type="button">下一步</button>
+                <button id="generate-plan" class="ds-button ds-button--primary" type="submit" hidden>生成计划</button>
+              </div>
+            </footer>
+          </form>
+
+          <section id="plan-result" class="planner-result" hidden aria-live="polite" aria-labelledby="result-title">
+            <header class="result-heading">
+              <h3 id="result-title">计划结果</h3>
+              <span id="result-state" class="save-state"></span>
+            </header>
+            <p id="result-summary" class="result-summary"></p>
+            <div id="result-budgets" class="budget-grid"></div>
+            <h4>考察目标 <span class="section-hint">展开可核对冻结版资料；这些是考察目标，不是固定题单</span></h4>
+            <div id="result-objectives" class="objective-list"></div>
+            <h4>约束与提示 <span class="section-hint">按来源区分，模型提示未经核验</span></h4>
+            <div class="note-groups">
+              <section class="note-group"><h5>系统校验与统计</h5><ul id="notes-system" class="result-limitations"></ul></section>
+              <section class="note-group model"><h5>模型提示 · 未经核验</h5><ul id="notes-model" class="result-limitations"></ul></section>
+              <section class="note-group"><h5>产品规则</h5><ul id="notes-policy" class="result-limitations"></ul></section>
+            </div>
+            <details class="result-technical"><summary>生成详情与版本信息</summary><div id="result-meta" class="result-meta"></div></details>
+            <p class="material-help" id="config-drift" role="status" hidden></p>
+            <footer class="result-actions">
+              <span class="original-note" id="result-note">确认前请核对目标与引用；确认后计划固定。</span>
+              <div class="ds-cluster">
+                <button id="adjust-config" class="ds-button" type="button">调整配置</button>
+                <a id="start-plan-interview" class="ds-button ds-button--primary" href="/interview" hidden>用此计划开始面试</a>
+                <button id="confirm-plan" class="ds-button ds-button--primary" type="button" hidden>确认保存计划</button>
+              </div>
+            </footer>
           </section>
         </div>
-      </section>
-      <footer class="page-footer"><span>方向清楚，练习才有效。</span><span>资料版本固定 · 目标可核验 · 追问有边界</span></footer>
-    </div>
+      </div>
+    </section>
+
+    <footer class="page-footer"><span>方向清楚，练习才有效。</span><span>资料快照固定 · 目标可核验 · 确认后再开始</span></footer>
   </main>
   <noscript>请启用 JavaScript，以配置并保存面试计划。</noscript>
 </body>

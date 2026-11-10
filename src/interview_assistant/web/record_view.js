@@ -9,9 +9,11 @@ export function renderRecord(node, { title, meta = "", fields = [] }) {
   node.replaceChildren();
   if (title) node.append(text("h3", title, "record-title"));
   if (meta) node.append(text("p", meta, "record-meta"));
-  for (const [label, value] of fields) {
+  for (const [label, value, options = {}] of fields) {
     const section = document.createElement("section");
-    section.append(text("h4", label), text("pre", value || "未填写", "record-text"));
+    const content = text("pre", value || options.emptyText || "未填写", "record-text");
+    if (!value) content.classList.add("record-empty");
+    section.append(text("h4", label), content);
     node.append(section);
   }
 }

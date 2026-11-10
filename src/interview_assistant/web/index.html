@@ -7,105 +7,124 @@
   <meta name="description" content="个人 AI 面试助手：整理自己的题目、答案与复习笔记。">
   <title>个人题库 · 练习场</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/theme.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/questions.css?v=20261110-4">
-  <link rel="stylesheet" href="/assets/workspace.css?v=20261110-4">
-  <script src="/assets/app.js?v=20261110-4" type="module"></script>
+  <link rel="stylesheet" href="/assets/tokens.css">
+  <link rel="stylesheet" href="/assets/base.css">
+  <link rel="stylesheet" href="/assets/typography.css">
+  <link rel="stylesheet" href="/assets/layout.css">
+  <link rel="stylesheet" href="/assets/components.css">
+  <link rel="stylesheet" href="/assets/questions.css?v=20261110-8">
+  <script src="/assets/app.js?v=20261110-8" type="module"></script>
 </head>
-<body class="questions-page">
-  <a class="skip-link" href="#main">跳到主内容</a>
-    <header class="topbar app-topbar">
+<body class="ds-root questions-page">
+  <a class="ds-skip" href="#main">跳到主内容</a>
+    <header class="ds-container ds-topbar app-topbar">
       <a class="app-brand" href="/" aria-label="练习场首页"><img src="/assets/favicon.svg" width="32" height="32" alt=""><span>练习场</span></a>
       <nav class="app-navigation" aria-label="工作区导航"><a href="/" aria-current="page">个人题库<span id="nav-count" class="navigation-count">—</span></a><a href="/materials">简历与项目</a><a href="/planner">面试计划</a><a href="/interview">模拟面试</a></nav>
       <span id="connection" class="connection" role="status"><i></i>正在连接</span>
     </header>
   <main id="main">
-    <div class="page">
+    <div class="page ds-container">
       <section class="page-heading">
-        <div><div class="eyebrow">PREPARE WITH PURPOSE</div><h1>个人题库<span class="title-dot">.</span></h1><p>按主题整理题目，集中复习同一类知识。</p></div>
-        <div class="heading-actions"><button class="button" id="import-markdown" type="button">导入 Markdown</button><button class="button primary" id="new-question" type="button"><span aria-hidden="true">＋</span> 新建题目</button></div>
+        <div><div class="eyebrow">YOUR KNOWLEDGE, YOUR WORDS</div><h1 class="ds-title">个人题库<span class="title-dot">.</span></h1><p class="ds-caption">整理自己的问答，在练习之前把知识读透。</p></div>
+        <div class="heading-actions"><button class="ds-button" id="import-markdown" type="button">导入 Markdown</button><button class="ds-button ds-button--primary" id="new-question" type="button"><span aria-hidden="true">＋</span> 新建题目</button></div>
       </section>
       <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" aria-label="关闭提示" type="button">×</button></div>
-      <section class="bank" aria-label="题库管理">
-        <aside class="category-column" aria-label="题目分类">
-          <div class="list-heading"><h2>分类</h2><button class="text-button" id="new-category" type="button">＋ 新建</button></div>
+      <div class="bank-tools"><button id="toggle-categories" class="ds-button ds-button--quiet ds-button--small" type="button" aria-controls="category-navigation" aria-expanded="true">收起分类</button><span id="filter-summary" class="ds-caption" aria-live="polite">全部题目</span><button id="clear-filters" class="ds-button ds-button--quiet ds-button--small" type="button" hidden>清除搜索与筛选</button></div>
+      <section id="bank" class="bank" aria-label="题库管理">
+        <aside id="category-navigation" class="category-column" aria-label="题目分类">
+          <div class="list-heading"><h2>分类</h2><div class="heading-cluster"><button class="text-button" id="clean-categories" type="button" hidden>清理空分类</button><button class="text-button" id="new-category" type="button">＋ 新建</button></div></div>
           <nav id="category-list" class="category-list" aria-label="按分类浏览"><p class="drawer-help">正在读取分类…</p></nav>
-          <p class="category-help">一题一个分类。先归类，再集中练习。</p>
+          <p class="category-help">分类只用于整理，原文始终属于你。</p>
         </aside>
         <div class="question-column">
           <div class="list-heading"><h2><span id="category-title">全部题目</span> <span id="total-count">—</span></h2><button class="text-button" id="refresh" type="button">刷新</button></div>
-          <form id="search-form" class="search-form" role="search"><label class="sr-only" for="search">搜索题干</label><span aria-hidden="true">⌕</span><input id="search" type="search" maxlength="256" placeholder="搜索题干…" autocomplete="off"><button type="submit" aria-label="搜索">↵</button></form>
-          <div class="filter-row"><label for="active-filter">显示</label><select id="active-filter"><option value="">全部状态</option><option value="true">已启用</option><option value="false">已停用</option></select><span>按创建时间排序</span></div>
-          <div class="batch-tools"><label><input id="select-page" type="checkbox"> 本页全选</label><button id="move-questions" class="text-button" type="button" disabled>移动分类 <span id="selection-count">0</span></button></div>
+          <form id="search-form" class="search-form" role="search"><label class="ds-sr-only" for="search">搜索题干</label><input id="search" class="ds-input" type="search" maxlength="256" placeholder="搜索题干…" autocomplete="off"><button class="ds-button ds-button--small" type="submit">搜索</button></form>
+          <div class="filter-row"><div><label for="active-filter">状态</label><select id="active-filter" class="ds-input"><option value="">全部状态</option><option value="true">已启用</option><option value="false">已停用</option></select></div><div><label for="sort-order">本页排序</label><select id="sort-order" class="ds-input" aria-describedby="sort-help"><option value="newest">创建时间 · 新到旧</option><option value="oldest">创建时间 · 旧到新</option><option value="title">题干顺序</option></select></div></div>
+          <p id="sort-help" class="list-help">按创建时间分页；排序仅调整当前页。</p>
+          <div class="batch-tools"><label><input id="select-page" type="checkbox"> 本页全选</label><span>已选 <span id="selection-count">0</span></span><button id="clear-selection" class="text-button" type="button" hidden>取消选择</button><button id="move-questions" class="text-button" type="button" disabled>移动分类</button><button id="delete-questions" class="text-button danger" type="button" disabled>批量删除</button></div>
           <div id="question-list" class="question-list" aria-live="polite" aria-busy="true"><p class="list-placeholder">正在读取题库…</p></div>
           <div class="pagination"><button id="previous-page" class="text-button" type="button" disabled>← 上一页</button><span id="page-number">第 1 页</span><button id="next-page" class="text-button" type="button" disabled>下一页 →</button></div>
         </div>
         <div class="editor-column">
-          <section id="welcome" class="welcome">
-            <div class="empty-art" aria-hidden="true"><div class="paper back"></div><div class="paper front"><span>Q.</span><i></i><i></i><i></i><b>＋</b></div></div>
-            <span class="eyebrow">YOUR KNOWLEDGE, YOUR WORDS</span><h2>按分类整理，按主题复习</h2><p>先创建自己的知识分类，<br>再把题目放到合适的位置。</p><small>左侧选择分类和题目；勾选题目后，可一次移动多道题。现有题目都可以从「未分类」开始整理。</small>
+          <p id="detail-status" class="ds-loading" role="status" hidden><span class="ds-spinner" aria-hidden="true"></span>正在读取题目…</p>
+          <section id="welcome" class="welcome ds-empty">
+            <span class="eyebrow">READ · REVIEW · REFINE</span><h2 id="welcome-title" class="ds-heading">选择一道题，读懂自己的答案</h2><p id="welcome-description" class="ds-caption">从左侧选择题目。需要修改时再进入编辑，历史版本和导入来源始终可查。</p><div class="ds-cluster"><button id="welcome-create" class="ds-button" type="button">新建题目</button><button id="welcome-import" class="ds-button ds-button--quiet" type="button">导入问答笔记</button></div>
           </section>
 
           <section id="editor" hidden aria-labelledby="editor-title">
-            <div class="editor-heading"><div><div class="eyebrow" id="editor-kicker">QUESTION EDITOR</div><h2 id="editor-title">新建题目</h2></div><span class="save-state" id="save-state">未保存</span></div>
-            <div class="editor-tabs" role="tablist" aria-label="题目内容"><button id="content-tab" type="button" role="tab" aria-selected="true" aria-controls="content-panel">题目内容</button><button id="history-tab" type="button" role="tab" aria-selected="false" aria-controls="history-panel" disabled>历史版本 <span id="version-count"></span></button><button id="source-tab" type="button" role="tab" aria-selected="false" aria-controls="source-panel" disabled>来源原文</button></div>
-            <div id="content-panel" role="tabpanel" aria-labelledby="content-tab">
-            <div class="record-actions" aria-label="题目操作"><span id="question-mode" class="record-mode">查看题目</span><button id="edit-question" class="button" type="button">编辑</button><button id="cancel-question" class="button" type="button" hidden>取消</button><button form="question-form" class="button primary" id="save-question" type="submit">保存题目 <span aria-hidden="true">↗</span></button><button class="text-button danger" id="delete-question" type="button" hidden>删除题目</button></div>
+            <button id="back-to-list" class="text-button back-to-list" type="button">← 返回题目列表</button>
+            <div class="editor-heading"><div><div class="eyebrow" id="editor-kicker">QUESTION</div><h2 id="editor-title" tabindex="-1">题目详情</h2></div><span class="save-state" id="save-state" role="status">未保存</span></div>
+            <div class="record-actions" aria-label="题目操作"><span id="question-mode" class="record-mode">阅读</span><button id="edit-question" class="ds-button ds-button--small" type="button">编辑题目</button><button id="history-tab" class="text-button" type="button" aria-haspopup="dialog" aria-controls="record-inspector" disabled>历史版本 <span id="version-count"></span></button><button id="source-tab" class="text-button" type="button" aria-haspopup="dialog" aria-controls="record-inspector" disabled>来源原文</button><details class="more-actions" id="question-more"><summary>更多</summary><button class="ds-button ds-button--danger ds-button--small" id="delete-question" type="button" hidden>删除题目</button></details></div>
+            <div id="content-panel">
             <section id="question-record-view" class="record-detail" aria-label="题目详情"></section>
             
               <form id="question-form">
-                <div class="field category-field"><label for="question-category">题目分类</label><select id="question-category" name="category_id"><option value="">未分类</option></select><p class="material-help">分类只影响题库整理，不改写题目与答案。</p></div>
+                <div class="field category-field"><label for="question-category">题目分类</label><select id="question-category" name="category_id"><option value="">未分类</option></select></div>
                 <div class="field"><label for="question-text">题目 <span class="required">*</span></label><textarea id="question-text" name="question_text" rows="3" placeholder="例如：RAG 中如何提高检索结果的相关性？" required></textarea></div>
                 <div class="field"><label for="answer-text">标准答案 <span class="field-hint">可留空，保留你的原文</span></label><textarea id="answer-text" name="standard_answer_text" rows="9" placeholder="用自己的语言整理答案，支持输入 Markdown 原文…"></textarea></div>
                 <div class="field"><label for="user-notes">复习笔记 <span class="field-hint">仅供自己参考</span></label><textarea id="user-notes" name="user_notes" rows="3" placeholder="容易混淆的概念、补充链接或下次要复习的内容…"></textarea></div>
                 <div class="activation"><div><label for="is-active">用于面试抽题</label><p>启用后可供后续面试使用。</p></div><label class="switch"><input id="is-active" name="is_active" type="checkbox" checked aria-label="用于面试抽题"><span></span></label></div>
-                <div id="conflict-actions" class="conflict-actions" hidden><p>服务器内容已变化。当前输入已保留，可先复制，再读取最新内容。</p><button class="button" id="reload-current" type="button">读取最新内容</button></div>
-                <footer class="editor-actions"><span class="original-note">原文由你维护，每次内容修改保留历史。</span></footer>
+                <div id="conflict-actions" class="conflict-actions" hidden><p>服务器内容已变化。当前输入已保留，可先复制，再读取最新内容。</p><button class="ds-button" id="reload-current" type="button">读取最新内容</button></div>
+                <footer class="editor-actions"><span class="original-note">内容修改保留历史 · Ctrl / ⌘ + Enter 保存</span><div class="ds-cluster"><button id="cancel-question" class="ds-button" type="button" hidden>取消</button><button form="question-form" class="ds-button ds-button--primary" id="save-question" type="submit">保存题目</button></div></footer>
               </form>
             </div>
-            <div id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden>
-              <p class="panel-description">每次修改题目、答案或笔记都会保留一份原文。启停不产生内容版本。</p>
-              <div id="history-list" class="history-list"></div>
-              <div class="pagination"><button id="history-previous" class="text-button" type="button">← 上一页</button><span id="history-page"></span><button id="history-next" class="text-button" type="button">下一页 →</button></div>
-              <article id="version-detail" class="version-detail" hidden><h3 id="version-title"></h3><h4>题目</h4><pre id="version-question"></pre><h4>标准答案</h4><pre id="version-answer"></pre><h4>复习笔记</h4><pre id="version-notes"></pre></article>
-            </div>
-            <div id="source-panel" role="tabpanel" aria-labelledby="source-tab" hidden><p class="panel-description" id="source-info"></p><article class="version-detail"><a id="source-download" class="text-button" hidden>下载完整来源文件 ↗</a><pre id="source-text"></pre></article></div>
           </section>
         </div>
       </section>
       <footer class="page-footer"><span>只积累属于你的知识。</span><span>个人题库 <span aria-hidden="true">·</span> 原文与历史可追溯</span></footer>
     </div>
   </main>
-  <dialog id="category-dialog" aria-labelledby="category-dialog-title">
+  <dialog id="record-inspector" class="ds-dialog record-inspector" aria-labelledby="inspector-title">
+    <header class="ds-dialog-head"><div><span class="eyebrow">只读资料</span><h2 id="inspector-title" class="ds-heading">历史版本</h2></div><button id="content-tab" class="ds-button ds-button--quiet" type="button" autofocus>返回当前题目 ×</button></header>
+    <div class="ds-dialog-body">
+      <section id="history-panel" aria-label="历史版本" hidden>
+        <p class="panel-description">每次修改题目、答案或笔记都会保留原文。启停和移动分类不产生内容版本。</p>
+        <div id="history-list" class="history-list"></div><button id="retry-history" class="ds-button ds-button--small" type="button" hidden>重新读取历史</button>
+        <div class="pagination"><button id="history-previous" class="text-button" type="button">← 上一页</button><span id="history-page"></span><button id="history-next" class="text-button" type="button">下一页 →</button></div>
+        <article id="version-detail" class="version-detail" hidden><h3 id="version-title"></h3><h4>题目</h4><pre id="version-question"></pre><h4>我的标准答案</h4><pre id="version-answer"></pre><h4>复习笔记</h4><pre id="version-notes"></pre></article>
+      </section>
+      <section id="source-panel" aria-label="来源原文" hidden><p class="panel-description" id="source-info"></p><button id="retry-source" class="ds-button ds-button--small" type="button" hidden>重新读取来源</button><article class="version-detail"><a id="source-download" class="text-button" hidden>下载完整来源文件 ↗</a><pre id="source-text"></pre></article></section>
+    </div>
+  </dialog>
+  <dialog id="category-dialog" class="ds-dialog" aria-labelledby="category-dialog-title">
     <form id="category-form" class="category-dialog-form">
       <header><h2 id="category-dialog-title">新建分类</h2><button class="text-button" id="close-category-dialog" type="button" aria-label="关闭分类窗口">关闭 ×</button></header>
       <div class="field"><label for="category-name">分类名称</label><input id="category-name" maxlength="60" required placeholder="例如：Java、数据库、RAG、项目深挖" autocomplete="off"></div>
       <p id="category-dialog-message" class="dialog-message" role="status" hidden></p>
-      <footer><button class="button primary" id="save-category" type="submit">保存分类</button></footer>
+      <footer><button class="ds-button ds-button--primary" id="save-category" type="submit">保存分类</button></footer>
     </form>
   </dialog>
-  <dialog id="move-dialog" aria-labelledby="move-dialog-title">
+  <dialog id="move-dialog" class="ds-dialog" aria-labelledby="move-dialog-title">
     <form id="move-form" class="category-dialog-form">
       <header><h2 id="move-dialog-title">移动题目分类</h2><button class="text-button" id="close-move-dialog" type="button" aria-label="关闭移动窗口">关闭 ×</button></header>
       <p id="move-description"></p>
       <div class="field"><label for="move-category">目标分类</label><select id="move-category"><option value="">未分类</option></select></div>
       <p id="move-dialog-message" class="dialog-message" role="status" hidden></p>
-      <footer><button class="button primary" id="confirm-move" type="submit">确认移动</button></footer>
+      <button id="reload-move-list" class="ds-button" type="button" hidden>刷新列表并重新勾选</button>
+      <footer><button class="ds-button ds-button--primary" id="confirm-move" type="submit">确认移动</button></footer>
     </form>
   </dialog>
-  <dialog id="import-dialog" aria-labelledby="import-title">
+  <dialog id="delete-dialog" class="ds-dialog" aria-labelledby="delete-dialog-title">
+    <form id="delete-form" class="category-dialog-form">
+      <header><h2 id="delete-dialog-title">批量删除题目</h2><button class="text-button" id="close-delete-dialog" type="button" aria-label="关闭删除窗口">关闭 ×</button></header>
+      <p id="delete-description"></p>
+      <p class="dialog-help">删除后题目从列表消失、不再参与抽题；已确认面试计划的冻结快照不受影响。题目内容与历史版本仍保存在数据库中。</p>
+      <p id="delete-dialog-message" class="dialog-message" role="status" hidden></p>
+      <footer><button class="ds-button" id="cancel-delete" type="button">取消</button><button class="ds-button ds-button--danger" id="confirm-delete" type="submit">删除所选题目</button></footer>
+    </form>
+  </dialog>
+  <dialog id="import-dialog" class="ds-dialog import-dialog" aria-labelledby="import-title">
     <header class="import-header"><div><div class="eyebrow">BUILD YOUR QUESTION BANK</div><h2 id="import-title">导入 Markdown 题库</h2></div><button class="dialog-close" id="import-close" type="button" aria-label="关闭导入">×</button></header>
     <ol class="import-steps" aria-label="导入步骤"><li id="import-step-file" class="active">01 <span>选择文件</span></li><li id="import-step-preview">02 <span>核对预览</span></li><li id="import-step-confirm">03 <span>确认入库</span></li></ol>
-    <section class="import-file-section" aria-label="文件与识别方式"><label class="import-file-label" for="markdown-file">选择你的问答笔记<input id="markdown-file" type="file" accept=".md,.markdown,text/markdown,text/plain"></label><div class="import-options"><label for="import-strategy">识别方式</label><select id="import-strategy"><option value="auto">自动识别</option><option value="heading_3">三级标题（###）</option><option value="heading_2">二级标题（##）</option><option value="qa">Q / A 标记</option></select><button class="button" id="parse-markdown" type="button">生成预览</button></div><p class="import-help">UTF-8 编码，单个文件最多 1 MiB、500 个候选段落。保留 Markdown 原文，不识别图片，也不自动补写答案。</p></section>
+    <section class="import-file-section" aria-label="文件与识别方式"><label class="import-file-label" for="markdown-file">选择你的问答笔记<input id="markdown-file" type="file" accept=".md,.markdown,text/markdown,text/plain"></label><div class="import-options"><label for="import-strategy">识别方式</label><select id="import-strategy"><option value="auto">自动识别</option><option value="heading_3">三级标题（###）</option><option value="heading_2">二级标题（##）</option><option value="qa">Q / A 标记</option></select><button class="ds-button" id="parse-markdown" type="button">生成预览</button></div><p class="import-help">UTF-8 编码，单个文件最多 1 MiB、500 个候选段落。保留 Markdown 原文，不识别图片，也不自动补写答案。</p></section>
     <div id="import-message" class="import-message" role="status" hidden></div>
     <section id="import-preview" hidden aria-label="导入预览">
       <div class="import-summary"><div><strong id="import-file-name"></strong><p id="import-summary-text"></p></div><a id="import-download" class="text-button">下载来源原文 ↗</a></div>
       <ul id="import-warnings" class="import-warnings"></ul>
       <div class="import-selection-tools"><span id="import-selected-count" aria-live="polite"></span><div><button id="import-recommended" class="text-button" type="button">按建议勾选</button><button id="import-select-all" class="text-button" type="button">全选</button><button id="import-select-none" class="text-button" type="button">全不选</button></div></div>
-      <div class="import-grid"><div id="import-candidates" class="import-candidates" aria-label="候选题目"></div><article class="import-candidate-detail"><div id="candidate-location" class="eyebrow"></div><ul id="candidate-warnings" class="import-warnings"></ul><h3>题干预览</h3><pre id="candidate-question"></pre><h3>答案预览</h3><pre id="candidate-answer"></pre><details><summary>查看本段来源原文</summary><pre id="candidate-raw"></pre></details></article></div>
+      <div class="import-grid"><div id="import-candidates" class="import-candidates" aria-label="候选题目"></div><article class="import-candidate-detail" tabindex="-1"><button id="back-to-candidates" class="text-button" type="button">← 返回候选列表</button><div id="candidate-location" class="eyebrow"></div><ul id="candidate-warnings" class="import-warnings"></ul><h3>题干预览</h3><pre id="candidate-question"></pre><h3>答案预览</h3><pre id="candidate-answer"></pre><details><summary>查看本段来源原文</summary><pre id="candidate-raw"></pre></details></article></div>
     </section>
-    <footer class="import-footer"><span>确认前不写入题库；预览草稿保存在本地数据库。</span><div><button class="button" id="import-cancel" type="button">关闭预览</button><button class="button primary" id="confirm-import" type="button" disabled>确认导入</button></div></footer>
+    <footer class="import-footer"><span>确认前不写入题库；预览草稿保存在本地数据库。</span><div><button class="ds-button" id="import-cancel" type="button">关闭预览</button><button class="ds-button ds-button--primary" id="confirm-import" type="button" disabled>确认导入</button></div></footer>
   </dialog>
   <noscript>请启用浏览器 JavaScript，以使用题库管理页面。</noscript>
 </body>

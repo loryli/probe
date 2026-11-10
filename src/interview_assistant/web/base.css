@@ -1,0 +1,22 @@
+@layer ds.base {
+  .ds-root, .ds-root *, .ds-root *::before, .ds-root *::after { box-sizing: border-box; }
+  .ds-root { margin: 0; background: var(--ds-bg); color: var(--ds-text); font: var(--ds-text-md)/1.65 var(--ds-font); overflow-wrap: anywhere; }
+  .ds-root :where(h1,h2,h3,p,pre,ul,ol,dl,figure) { margin: 0; }
+  .ds-root :where(button,input,textarea,select) { font: inherit; }
+  .ds-root button { cursor: pointer; }
+  .ds-root :disabled { cursor: not-allowed; }
+  .ds-root a { color: var(--ds-action); text-underline-offset: .2em; }
+  .ds-root a:hover { text-decoration-thickness: 2px; }
+  .ds-root :focus-visible { outline: 3px solid var(--ds-focus); outline-offset: 3px; }
+  .ds-root [hidden] { display: none !important; }
+  .ds-root :where(button,input,select,textarea,a) { -webkit-tap-highlight-color: transparent; }
+  .ds-root .ds-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  .ds-skip { position: fixed; left: 16px; top: 8px; z-index: 100; padding: 12px; background: var(--ds-surface); transform: translateY(-160%); }
+  .ds-skip:focus { transform: none; }
+  .ds-root ::selection { background: var(--ds-primary-soft); color: var(--ds-text); }
+  .ds-root :where(section[id],h2[id]) { scroll-margin-top: calc(var(--ds-nav-height) + 24px); }
+  @media (prefers-reduced-motion: reduce) {
+    .ds-root { --ds-motion: 0ms; }
+    .ds-root *, .ds-root *::before, .ds-root *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+}

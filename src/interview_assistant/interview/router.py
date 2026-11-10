@@ -21,6 +21,7 @@ from interview_assistant.interview.schemas import (
     AnswerSubmit,
     ReportCreate,
     ReportRead,
+    SessionBatchDelete,
     SessionControl,
     SessionCreate,
     SessionList,
@@ -100,6 +101,21 @@ async def list_sessions(
     offset: Offset = 0,
 ) -> SessionList:
     return await InterviewService(session, settings).list_sessions(limit, offset)
+
+
+@router.post(
+    "/batch-delete",
+    response_model=dict,
+    summary="批量删除面试记录：连同问答轮次与整场复盘物理删除，不可恢复",
+    responses={409: {"description": "包含进行中的场次"}},
+)
+async def batch_delete_sessions(
+    payload: SessionBatchDelete,
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> dict:
+    deleted = await InterviewService(session, settings).delete_sessions(payload)
+    return {"deleted": deleted}
 
 
 @router.get("/{session_id}", response_model=SessionRead, summary="读取场次、目标进度与全部轮次")

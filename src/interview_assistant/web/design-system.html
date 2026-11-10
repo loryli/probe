@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设计系统 · 练习场</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/tokens.css">
+  <link rel="stylesheet" href="/assets/base.css">
+  <link rel="stylesheet" href="/assets/typography.css">
+  <link rel="stylesheet" href="/assets/layout.css">
+  <link rel="stylesheet" href="/assets/components.css">
+  <link rel="stylesheet" href="/assets/design-system.css">
+  <script type="module" src="/assets/design-system.js"></script>
+</head>
+<body class="ds-root">
+  <a class="ds-skip" href="#main">跳到组件内容</a>
+  <header class="ds-topbar ds-container spec-header">
+    <a class="spec-brand" href="/"><img src="/assets/favicon.svg" alt="">练习场 <span class="ds-caption">/ 设计系统</span></a>
+    <span class="spec-version">FOUNDATIONS · 1.0</span>
+    <a class="ds-button ds-button--quiet ds-button--small" href="/">返回工作区 ↗</a>
+  </header>
+  <div class="ds-container spec-layout">
+    <nav class="spec-index" aria-label="设计系统目录"><span class="ds-overline">设计目录</span><a href="#colors">颜色与语义</a><a href="#type">文字与阅读</a><a href="#controls">按钮与输入</a><a href="#overlays">弹窗与抽屉</a><a href="#states">反馈与状态</a><a href="#layout">布局与尺度</a></nav>
+    <main id="main" class="spec-main">
+      <div class="spec-intro"><p class="ds-overline">练习场 · 界面基础</p><h1 class="ds-display">让内容清楚，<br>让练习专注。</h1><p class="ds-body">以温暖的底色、克制的线条和清晰的文字层级，承载自己的知识与真实的回答。界面退后一步，内容往前一步。</p><p class="ds-caption spec-gap">独立组件展示区。这里的交互仅用于演示，不保存资料、不调用 AI，也不改变四个业务页面。</p></div>
+      <section id="colors" class="spec-section" aria-labelledby="colors-title">
+        <div class="spec-section-heading"><h2 id="colors-title" class="ds-heading">颜色与语义</h2><small>COLOR / 01</small></div>
+        <div class="spec-palette">
+          <figure><div class="spec-swatch" style="--swatch:var(--ds-bg)"></div><figcaption>页面底色<br><code>#F8F6F2</code></figcaption></figure>
+          <figure><div class="spec-swatch" style="--swatch:var(--ds-text)"></div><figcaption>主要文字<br><code>#292B2E</code></figcaption></figure>
+          <figure><div class="spec-swatch" style="--swatch:var(--ds-primary)"></div><figcaption>品牌强调<br><code>#C46B4E</code></figcaption></figure>
+          <figure><div class="spec-swatch" style="--swatch:var(--ds-border)"></div><figcaption>内容分割<br><code>#E8E2D9</code></figcaption></figure>
+          <figure><div class="spec-swatch" style="--swatch:var(--ds-surface)"></div><figcaption>阅读表面<br><code>#FFFFFF</code></figcaption></figure>
+        </div>
+        <p class="ds-caption spec-gap">品牌色负责强调；深陶土色 #9F4E35 用于主按钮与操作文字。轻分割线不承担输入框的唯一识别边界。</p>
+      </section>
+      <section id="type" class="spec-section" aria-labelledby="type-title">
+        <div class="spec-section-heading"><h2 id="type-title" class="ds-heading">文字与阅读</h2><small>TYPOGRAPHY / 02</small></div>
+        <div class="spec-type-row"><small>DISPLAY · 32–48</small><p class="ds-display">从理解，到表达。</p></div>
+        <div class="spec-type-row"><small>TITLE · 32</small><p class="ds-title">我的知识，自己的答案</p></div>
+        <div class="spec-type-row"><small>HEADING · 24</small><p class="ds-heading">把实现过程讲清楚</p></div>
+        <div class="spec-type-row"><small>BODY · 16</small><p class="ds-body">保留完整原文与必要上下文，让长答案也能从容阅读。</p></div>
+        <div class="spec-type-row"><small>CAPTION · 14</small><p class="ds-caption">资料来源、版本和辅助说明，保持可读而不过分突出。</p></div>
+        <div class="spec-sample ds-prose spec-gap"><h3 class="ds-subheading">一段回答的阅读尺度</h3><p>先说明结论，再交代依据、取舍与结果。阅读区的宽度由内容决定，不为填满屏幕而无限延长一行，也不为了留出辅助栏而把正文挤窄。</p><pre class="ds-code" tabindex="0" aria-label="代码阅读示例">answer = {"conclusion": "先给结论", "evidence": "再说依据"}</pre><p class="ds-caption">字体来自本机回退；原文可以复制，长代码在自己的区域横向滚动。</p></div>
+      </section>
+      <section id="controls" class="spec-section" aria-labelledby="controls-title">
+        <div class="spec-section-heading"><h2 id="controls-title" class="ds-heading">按钮与输入</h2><small>CONTROLS / 03</small></div>
+        <div class="ds-stack">
+          <div class="ds-cluster"><button class="ds-button ds-button--primary" type="button" id="demo-primary">主要操作</button><button class="ds-button" type="button" id="demo-secondary">次要操作</button><button class="ds-button ds-button--quiet" type="button" id="demo-quiet">文字操作</button><button class="ds-button ds-button--danger" type="button" id="demo-danger">危险操作</button></div>
+          <div class="ds-cluster"><button class="ds-button ds-button--primary" type="button" id="demo-loading">演示等待状态</button><button class="ds-button" type="button" disabled>暂不可用</button><button class="ds-button ds-button--small" type="button" id="demo-small">紧凑操作</button><span class="ds-caption">Tab 查看焦点，按住按钮查看按下状态。</span></div>
+          <form id="demo-form" class="spec-sample ds-stack" novalidate>
+            <div class="ds-split"><div class="ds-field"><label class="ds-label" for="demo-title">练习名称（必填）</label><input class="ds-input" id="demo-title" name="title" required maxlength="80" placeholder="输入名称，体验表单状态" aria-describedby="title-help title-error"><span id="title-help" class="ds-caption">只在本页演示，内容不会保存。</span><span id="title-error" class="ds-field-error" hidden>请填写练习名称。</span></div><div class="ds-field"><label class="ds-label" for="demo-select">训练方式</label><select class="ds-input" id="demo-select"><option>文字练习</option><option>资料核对</option></select><span class="ds-caption">原生选择控件，保留键盘操作。</span></div></div>
+            <div class="ds-field"><label class="ds-label" for="demo-answer">回答草稿</label><textarea id="demo-answer" class="ds-input" rows="4" placeholder="试着写一段回答，也可以调整文本框高度。"></textarea></div>
+            <div class="ds-split"><div class="ds-field"><label class="ds-label" for="demo-readonly">只读状态</label><input class="ds-input" id="demo-readonly" value="可以选择和复制，不能编辑" readonly></div><div class="ds-field"><label class="ds-label" for="demo-disabled">禁用状态</label><input class="ds-input" id="demo-disabled" value="当前操作不可用" disabled></div></div>
+            <fieldset style="border:0;padding:0;margin:0"><legend class="ds-label">选择控件</legend><div class="ds-cluster"><label class="ds-choice"><input type="checkbox" checked>我已核对（示例）</label><label class="ds-choice"><input type="radio" name="demo-source" checked>项目</label><label class="ds-choice"><input type="radio" name="demo-source">题库</label><label class="ds-choice"><input type="checkbox" disabled>暂不可选</label></div></fieldset>
+            <div class="ds-cluster"><button class="ds-button ds-button--primary" type="submit">检查输入</button><span id="form-result" class="ds-caption" role="status"></span></div>
+          </form>
+        </div>
+      </section>
+      <section id="overlays" class="spec-section" aria-labelledby="overlays-title">
+        <div class="spec-section-heading"><h2 id="overlays-title" class="ds-heading">弹窗、抽屉与标签页</h2><small>DISCLOSURE / 04</small></div>
+        <div class="ds-cluster"><button class="ds-button" id="open-dialog" type="button">打开确认弹窗</button><button class="ds-button" id="open-drawer" type="button">打开辅助抽屉</button><span class="ds-caption">Esc 关闭，焦点返回原入口。</span></div>
+        <div id="demo-tabs" class="spec-gap">
+          <div class="ds-tabs" role="tablist" aria-label="资料展示示例"><button class="ds-tab" type="button" role="tab" id="tab-reading" aria-controls="panel-reading" aria-selected="true">阅读</button><button class="ds-tab" type="button" role="tab" id="tab-source" aria-controls="panel-source" aria-selected="false" tabindex="-1">来源</button><button class="ds-tab" type="button" role="tab" id="tab-unavailable" aria-controls="panel-unavailable" aria-selected="false" tabindex="-1" disabled>暂不可用</button></div>
+          <section class="ds-tabpanel ds-prose" role="tabpanel" id="panel-reading" aria-labelledby="tab-reading" tabindex="0"><h3 class="ds-subheading">先阅读，需要时再展开。</h3><p>标签页用于同一对象的不同视图。按左右方向键切换，Home / End 到首尾；禁用项不会截断键盘路径。</p></section>
+          <section class="ds-tabpanel ds-prose" role="tabpanel" id="panel-source" aria-labelledby="tab-source" tabindex="0" hidden><h3 class="ds-subheading">来源应当清楚可达。</h3><p>示例来源内容。真实页面中的资料版本与引用仍由业务模块管理，切换标签不应触发模型调用。</p></section>
+          <section class="ds-tabpanel" role="tabpanel" id="panel-unavailable" aria-labelledby="tab-unavailable" hidden>暂不可用。</section>
+        </div>
+      </section>
+      <section id="states" class="spec-section" aria-labelledby="states-title">
+        <div class="spec-section-heading"><h2 id="states-title" class="ds-heading">反馈与状态</h2><small>FEEDBACK / 05</small></div>
+        <div class="ds-stack">
+          <div class="ds-cluster"><span class="ds-badge">未保存</span><span class="ds-badge ds-badge--success">已保存</span><span class="ds-badge ds-badge--warning">待核对</span><span class="ds-badge ds-badge--info">生成中</span><span class="ds-badge ds-badge--danger">生成失败</span></div>
+          <div class="ds-notice ds-notice--success"><div class="ds-stack"><strong>保存确认</strong><p>只有收到服务端确认，才能显示“已保存”。这是状态样式示例。</p></div></div>
+          <div class="ds-notice ds-notice--warning"><div class="ds-stack"><strong>需要核对</strong><p>AI 候选尚未成为正式资料，核对后再确认。</p></div></div>
+          <div class="ds-notice ds-notice--danger"><div class="ds-stack"><strong>下一步生成失败</strong><p>说明已保存与失败的分别是什么，保留恢复入口，不让错误只出现在短暂通知中。</p><button class="ds-button ds-button--small" id="demo-retry" type="button">演示重试反馈</button></div></div>
+          <div class="ds-loading"><span class="ds-spinner" aria-hidden="true"></span><span>正在生成示例… 不显示虚构的完成百分比。</span></div>
+          <div class="ds-cluster"><button class="ds-button" type="button" id="toast-success">显示成功通知</button><button class="ds-button" type="button" id="toast-error">显示错误通知</button></div>
+          <div class="ds-split"><div class="ds-empty"><h3 class="ds-subheading">还没有内容</h3><p class="ds-caption">说明下一步，在需要的位置提供主操作，不用大幅插画填满空白。</p><button class="ds-button ds-button--small" type="button" id="demo-empty">体验空状态操作</button></div><div class="ds-empty"><h3 class="ds-subheading">没有符合条件的结果</h3><p class="ds-caption">保留搜索条件，让用户清除筛选，而不是要求重新创建资料。</p><button class="ds-button ds-button--quiet" type="button" id="demo-clear">清除条件（示例）</button></div></div>
+        </div>
+      </section>
+      <section id="layout" class="spec-section" aria-labelledby="layout-title">
+        <div class="spec-section-heading"><h2 id="layout-title" class="ds-heading">布局与尺度</h2><small>SPACE / 06</small></div>
+        <div class="spec-spacing" aria-label="间距刻度"><div><i style="--size:4px"></i>4</div><div><i style="--size:8px"></i>8</div><div><i style="--size:12px"></i>12</div><div><i style="--size:16px"></i>16</div><div><i style="--size:24px"></i>24</div><div><i style="--size:32px"></i>32</div><div><i style="--size:48px"></i>48</div><div><i style="--size:64px"></i>64 px</div></div>
+        <div class="spec-layout-samples spec-gap"><div><div class="spec-layout-map" aria-hidden="true"><span></span><span></span><span></span></div><h3 class="ds-subheading">知识阅读</h3><p class="ds-caption">分类 180 · 列表 300 · 阅读 ≤880</p></div><div><div class="spec-layout-map" aria-hidden="true"><span></span><span></span></div><h3 class="ds-subheading">资料核对</h3><p class="ds-caption">导航 240 · 来源按需展开</p></div><div><div class="spec-layout-map" aria-hidden="true"><span></span></div><h3 class="ds-subheading">专注训练</h3><p class="ds-caption">主区 800 · 辅助按需出现</p></div></div>
+        <p class="ds-caption spec-gap">页面最大 1440px，左右边距 40 / 24 / 16px。布局由任务决定；正文随页面滚动，不套固定高度阅读容器。</p>
+      </section>
+      <footer class="spec-footer ds-caption">练习场 Design System · 基础样式与交互组件。真实业务将按页面逐步接入。</footer>
+    </main>
+  </div>
+  <dialog id="demo-dialog" class="ds-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-copy"><div class="ds-dialog-head"><h2 class="ds-heading" id="dialog-title">确认这次操作</h2><button class="ds-button ds-button--quiet ds-button--small" type="button" data-close="demo-dialog" aria-label="关闭确认弹窗">关闭</button></div><div class="ds-dialog-body"><p id="dialog-copy">弹窗只承载一个需要明确决定的任务。这是组件演示，确认不会修改任何资料。</p></div><div class="ds-dialog-foot"><button class="ds-button" type="button" data-close="demo-dialog" autofocus>取消</button><button class="ds-button ds-button--primary" id="confirm-demo" type="button">确认演示</button></div></dialog>
+  <dialog id="demo-drawer" class="ds-dialog ds-drawer" aria-labelledby="drawer-title"><div class="ds-dialog-head"><h2 class="ds-heading" id="drawer-title">辅助资料</h2><button class="ds-button ds-button--quiet ds-button--small" type="button" data-close="demo-drawer" autofocus>关闭</button></div><div class="ds-dialog-body ds-prose"><span class="ds-badge ds-badge--info">按需展开</span><h3 class="ds-subheading">把主任务留在中心</h3><p>辅助资料不是另一个主页面。关闭后回到原来的操作位置。</p><p>这个示例使用模态抽屉。未来宽屏并列面板应采用非模态结构，而不复用模态焦点锁。</p><label class="ds-field"><span class="ds-label">抽屉内输入示例</span><input class="ds-input" placeholder="Tab 可到达这里"></label></div><div class="ds-dialog-foot"><button class="ds-button" type="button" data-close="demo-drawer">返回主任务</button></div></dialog>
+  <div class="ds-toast-region" id="toast-region" aria-live="polite" aria-relevant="additions" aria-label="操作通知"></div>
+</body>
+</html>

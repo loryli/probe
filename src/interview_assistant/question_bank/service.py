@@ -3,7 +3,7 @@ import json
 import unicodedata
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -12,10 +12,12 @@ from interview_assistant.database import utc_now
 from interview_assistant.question_bank.models import Question, QuestionCategory, QuestionVersion
 from interview_assistant.question_bank.schemas import (
     CategoryAssignment,
+    CategoryBatchDelete,
     CategoryCreate,
     CategoryList,
     CategoryRead,
     CategoryRename,
+    QuestionBatchDelete,
     QuestionCreate,
     QuestionHistory,
     QuestionList,
@@ -198,6 +200,29 @@ class QuestionService:
         except StaleDataError:
             raise RevisionConflict from None
 
+    async def delete_batch(self, payload: QuestionBatchDelete) -> int:
+        """批量逻辑删除：原子执行，任何一道不存在或版本不符都会整体回滚。"""
+        try:
+            async with self.session.begin():
+                deleted = 0
+                for item in sorted(payload.questions, key=lambda entry: str(entry.id)):
+                    row = await self.session.scalar(
+                        select(Question).where(
+                            Question.id == str(item.id), Question.deleted_at.is_(None)
+                        ).with_for_update()
+                    )
+                    if row is None:
+                        raise QuestionNotFound
+                    if row.revision != item.expected_revision:
+                        raise RevisionConflict
+                    row.deleted_at = row.updated_at = utc_now()
+                    row.is_active = False
+                    deleted += 1
+                await self.session.flush()
+            return deleted
+        except StaleDataError:
+            raise RevisionConflict from None
+
     async def history(self, question_id: str, *, limit: int, offset: int) -> QuestionHistory:
         question = await self.require_question(question_id)
         versions = await self.session.scalars(
@@ -322,3 +347,48 @@ class CategoryService:
             return reads
         except StaleDataError:
             raise RevisionConflict from None
+
+    async def delete_batch(self, payload: CategoryBatchDelete) -> int:
+        """批量删除分类：只允许删除空分类；仍被已删除题目引用的分类先解除引用。
+
+        分类是整理工具而非内容本身，删除是物理删除；题库原文与已确认计划的
+        冻结快照都不依赖分类。任何条目不存在、版本不符或分类非空时整体回滚。
+        """
+        try:
+            async with self.session.begin():
+                deleted = 0
+                for item in sorted(payload.categories, key=lambda entry: str(entry.id)):
+                    row = await self.session.get(QuestionCategory, str(item.id))
+                    if row is None:
+                        raise CategoryProblem(
+                            "category_not_found", "分类不存在，请刷新分类列表后重试", 404
+                        )
+                    if row.revision != item.expected_revision:
+                        raise CategoryProblem(
+                            "category_revision_conflict", "分类已被修改，请刷新后重试"
+                        )
+                    alive = await self.session.scalar(
+                        select(func.count()).select_from(Question).where(
+                            Question.category_id == row.id,
+                            Question.deleted_at.is_(None),
+                        )
+                    )
+                    if alive:
+                        raise CategoryProblem(
+                            "category_not_empty",
+                            f"分类「{row.name}」还有 {int(alive)} 道题目，请先移动或删除这些题目",
+                        )
+                    # 已逻辑删除的题目不再出现在任何列表里，解除引用后即可删除分类。
+                    await self.session.execute(
+                        update(Question)
+                        .where(Question.category_id == row.id)
+                        .values(category_id=None)
+                    )
+                    await self.session.delete(row)
+                    deleted += 1
+                await self.session.flush()
+            return deleted
+        except StaleDataError:
+            raise CategoryProblem(
+                "category_revision_conflict", "分类已被修改，请刷新后重试"
+            ) from None

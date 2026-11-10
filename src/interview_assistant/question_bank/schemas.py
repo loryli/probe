@@ -143,3 +143,42 @@ class CategoryAssignment(BaseModel):
         if len({item.id for item in self.questions}) != len(self.questions):
             raise ValueError("同一道题目不能重复提交")
         return self
+
+
+class QuestionBatchDelete(BaseModel):
+    """批量逻辑删除题目；每个条目携带 revision，防止删掉别人刚改过的内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    questions: list[QuestionMove] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_questions(self) -> Self:
+        if len({item.id for item in self.questions}) != len(self.questions):
+            raise ValueError("同一道题目不能重复提交")
+        return self
+
+
+class CategoryMove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    expected_revision: int = Field(ge=1)
+
+
+class CategoryBatchDelete(BaseModel):
+    """批量删除分类；只有没有任何未删除题目的分类可以被删除。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    categories: list[CategoryMove] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_categories(self) -> Self:
+        if len({item.id for item in self.categories}) != len(self.categories):
+            raise ValueError("同一个分类不能重复提交")
+        return self
+
+
+class DeleteResult(BaseModel):
+    deleted: int

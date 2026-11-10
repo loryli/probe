@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -51,6 +51,7 @@ from interview_assistant.interview.schemas import (
     ReportDraft,
     ReportEvaluation,
     ReportRead,
+    SessionBatchDelete,
     SessionControl,
     SessionCreate,
     SessionList,
@@ -500,6 +501,50 @@ class InterviewService:
                 return SessionList(items=items, total=total, limit=limit, offset=offset)
         except StaleDataError:
             raise conflict() from None
+
+    async def delete_sessions(self, payload: SessionBatchDelete) -> int:
+        """物理删除面试记录：场次、全部问答轮次与整场复盘一起删除。
+
+        进行中的场次不允许删除（先结束或暂停），避免与后台生成任务互相覆盖；
+        计划不依赖场次存在，已确认计划不受影响。
+        """
+        ids = sorted({str(item) for item in payload.session_ids})
+        async with self.session.begin():
+            rows = {
+                row.id: row
+                for row in await self.session.scalars(
+                    select(InterviewSession).where(InterviewSession.id.in_(ids))
+                )
+            }
+            for session_id in ids:
+                row = rows.get(session_id)
+                if row is None:
+                    raise InterviewError(
+                        "session_not_found", "场次不存在或已被删除，请刷新记录列表", 404
+                    )
+                if row.status == "active":
+                    raise InterviewError(
+                        "session_active",
+                        "进行中的场次不能删除，请先结束或暂停这场面试",
+                        409,
+                    )
+            # 删除顺序：复盘 → 回答轮（持有 answers_turn_id 引用）→ 问题轮 → 场次。
+            await self.session.execute(
+                delete(InterviewReport).where(InterviewReport.session_id.in_(ids))
+            )
+            await self.session.execute(
+                delete(InterviewTurn).where(
+                    InterviewTurn.session_id.in_(ids),
+                    InterviewTurn.answers_turn_id.is_not(None),
+                )
+            )
+            await self.session.execute(
+                delete(InterviewTurn).where(InterviewTurn.session_id.in_(ids))
+            )
+            for session_id in ids:
+                await self.session.delete(rows[session_id])
+            await self.session.flush()
+        return len(ids)
 
     async def plan_runtime(self, plan_id: str) -> PlanRuntime:
         try:

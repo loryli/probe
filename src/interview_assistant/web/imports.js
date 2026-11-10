@@ -1,3 +1,5 @@
+import { openOverlay } from "./components.js";
+
 // Import UI owns its draft selection; the server owns extracted text and source.
 export function setupMarkdownImport({ request, onImported, canOpen = () => true }) {
   const $ = (id) => document.getElementById(id);
@@ -33,33 +35,48 @@ export function setupMarkdownImport({ request, onImported, canOpen = () => true 
     }
     $("confirm-import").disabled = busy || !preview || confirmed || selected.size === 0;
     $("confirm-import").textContent = busy ? "正在处理…" : confirmed ? "已导入" : pending ? "重试确认" : `确认导入${selected.size ? ` ${selected.size} 道题` : ""}`;
+    $("import-cancel").textContent = confirmed ? "返回题库" : "关闭预览";
     $("import-selected-count").textContent = `已选 ${selected.size} / ${preview?.candidates.length || 0} 个候选`;
   }
 
   function setBusy(value) { busy = value; updateControls(); }
 
   function setStep(step) {
-    for (const name of ["file", "preview", "confirm"]) $("import-step-" + name).classList.toggle("active", step === name);
+    for (const name of ["file", "preview", "confirm"]) {
+      const node = $("import-step-" + name);
+      node.classList.toggle("active", step === name);
+      if (step === name) node.setAttribute("aria-current", "step"); else node.removeAttribute("aria-current");
+    }
   }
 
   function invalidate() {
     preview = null;
     selected = new Set();
     current = null;
+    dialog.classList.remove("candidate-open");
     $("import-preview").hidden = true;
     message("");
     setStep("file");
     updateControls();
   }
 
-  function showCandidate(candidate) {
+  function showCandidate(candidate, focus = false) {
     current = candidate.index;
     $("candidate-location").textContent = `${candidate.heading_path.join(" / ") || "问答笔记"} · 第 ${candidate.start_line}–${candidate.end_line} 行`;
     $("candidate-question").textContent = candidate.question_text || "（空题干，不能导入）";
     $("candidate-answer").textContent = candidate.standard_answer_text || "（未填写，不会自动补写）";
     $("candidate-raw").textContent = candidate.raw_text;
     $("candidate-warnings").replaceChildren(...candidate.warnings.map((warning) => element("li", warning)));
-    for (const node of $("import-candidates").children) node.classList.toggle("active", Number(node.dataset.index) === current);
+    for (const node of $("import-candidates").children) {
+      const active = Number(node.dataset.index) === current;
+      node.classList.toggle("active", active);
+      node.querySelector("button")?.setAttribute("aria-pressed", String(active));
+    }
+    if (focus && window.matchMedia("(max-width: 899px)").matches) {
+      dialog.classList.add("candidate-open");
+      document.querySelector(".import-candidate-detail").focus();
+      document.querySelector(".import-candidate-detail").scrollIntoView({ block: "start" });
+    }
   }
 
   function renderCandidates() {
@@ -81,7 +98,7 @@ export function setupMarkdownImport({ request, onImported, canOpen = () => true 
       button.append(element("small", `${candidate.index + 1} · 第 ${candidate.start_line}–${candidate.end_line} 行`));
       button.append(element("span", candidate.question_text || "空题干"));
       if (candidate.warnings.length) button.append(element("small", `${candidate.warnings.length} 条提示`, "candidate-warning-count"));
-      button.addEventListener("click", () => showCandidate(candidate));
+      button.addEventListener("click", () => showCandidate(candidate, true));
       row.append(input, button);
       $("import-candidates").append(row);
     }
@@ -97,6 +114,7 @@ export function setupMarkdownImport({ request, onImported, canOpen = () => true 
   function showPreview(data) {
     preview = data;
     pending = null;
+    dialog.classList.remove("candidate-open");
     selected = new Set(data.status === "confirmed" ? data.selected_indices : data.candidates.filter((item) => item.recommended).map((item) => item.index));
     $("import-preview").hidden = false;
     $("import-file-name").textContent = data.file_name;
@@ -157,7 +175,12 @@ export function setupMarkdownImport({ request, onImported, canOpen = () => true 
     renderCandidates();
   }
 
-  $("import-markdown").addEventListener("click", () => { if (canOpen()) { dialog.showModal(); updateControls(); } });
+  $("import-markdown").addEventListener("click", () => { if (canOpen()) { openOverlay(dialog); updateControls(); } });
+  $("back-to-candidates").addEventListener("click", () => {
+    dialog.classList.remove("candidate-open");
+    const row = [...$("import-candidates").children].find((node) => Number(node.dataset.index) === current);
+    row?.querySelector("button")?.focus();
+  });
   for (const id of ["import-close", "import-cancel"]) $(id).addEventListener("click", () => { if (!busy) dialog.close(); });
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
   $("markdown-file").addEventListener("change", invalidate);

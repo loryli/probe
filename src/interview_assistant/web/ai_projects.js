@@ -1,4 +1,4 @@
-export function setupAiProjects({ request, run, getResume, isResumeDirty, notify, onLoadCandidate }) {
+export function setupAiProjects({ request, run, getResume, isResumeDirty, notify, onLoadCandidate, progress = (_label, action) => action() }) {
   const $ = (id) => document.getElementById(id);
   const state = { resumeId: null, items: [], selectedId: null, pending: null, offset: 0, total: 0 };
   const labels = { running: "提取中", ready: "待核对", confirmed: "已全部保存", failed: "提取失败" };
@@ -36,7 +36,8 @@ export function setupAiProjects({ request, run, getResume, isResumeDirty, notify
     $("ai-draft-previous").disabled = state.offset === 0;
     $("ai-draft-next").disabled = state.offset + 10 >= state.total;
     $("ai-draft-page").textContent = `${Math.floor(state.offset / 10) + 1} / ${Math.max(1, Math.ceil(state.total / 10))}`;
-    $("ai-extract-projects").textContent = state.pending || draft?.status === "running" ? "读取本次结果" : "AI 提取项目";
+    $("ai-extract-projects").textContent = state.pending || draft?.status === "running" ? "读取本次结果" : "提取候选项目";
+    $("ai-extract-projects").title = getResume() ? `仅发送已保存简历 v${getResume().content_version} 的文字，不上传 PDF 原件` : "请先保存简历";
     const container = $("ai-candidates");
     container.replaceChildren();
     $("ai-draft-info").textContent = "";
@@ -46,7 +47,11 @@ export function setupAiProjects({ request, run, getResume, isResumeDirty, notify
     }
     const usage = draft.input_tokens === null && draft.output_tokens === null ? "" :
       ` · 输入 ${draft.input_tokens ?? "—"} / 输出 ${draft.output_tokens ?? "—"} tokens`;
-    $("ai-draft-info").textContent = `${labels[draft.status]} · 简历 v${draft.source_version} · ${draft.model}${draft.elapsed_ms === null ? "" : ` · ${(draft.elapsed_ms / 1000).toFixed(1)} 秒`}${usage}`;
+    $("ai-draft-info").textContent = `AI 候选 · ${labels[draft.status]} · 固定依据简历 v${draft.source_version}。只有逐项核对并保存后才成为正式项目。`;
+    const technical = document.createElement("details");
+    technical.className = "ai-technical";
+    technical.append(text("summary", "提取任务详情"), text("p", `${draft.model}${draft.elapsed_ms === null ? "" : ` · ${(draft.elapsed_ms / 1000).toFixed(1)} 秒`}${usage}`));
+    container.append(technical);
     if (draft.status === "running") {
       container.append(text("p", "本次提取仍在处理，可点击「刷新结果」。读取结果不会再次调用模型。", "material-help"));
       return;
@@ -62,20 +67,20 @@ export function setupAiProjects({ request, run, getResume, isResumeDirty, notify
       const saved = draft.confirmed_projects[String(index)];
       const card = text("article", "", "ai-candidate");
       const heading = text("div", "", "project-toolbar");
-      const action = text("button", saved ? "已确认保存" : "载入编辑", "button");
+      const action = text("button", saved ? "已保存为项目" : "载入核对", "ds-button ds-button--small");
       action.type = "button";
       action.disabled = !!saved;
       action.addEventListener("click", () => void run(() => onLoadCandidate(draft, index)));
       heading.append(text("h4", project.name), action);
-      card.append(heading, text("p", `${project.facts.length} 条事实 · 模型自评 ${Math.round(project.confidence * 100)}%（不代表真实性）`, "material-help"));
+      card.append(heading, text("p", `${saved ? "用户已确认" : "AI 候选，待人工核对"} · ${project.facts.length} 条事实 · 依据简历 v${draft.source_version}`, "material-help"));
       if (project.summary) card.append(text("p", project.summary));
       for (const warning of project.needs_confirmation) card.append(text("p", warning, "ai-warning"));
       const evidence = document.createElement("details");
-      evidence.append(text("summary", "项目原文依据"), text("pre", project.evidence_quote));
+      evidence.append(text("summary", "项目原文依据与提取信息"), text("pre", project.evidence_quote), text("p", `模型自评 ${Math.round(project.confidence * 100)}%（不代表真实性）`, "material-help"));
       card.append(evidence);
-      for (const fact of project.facts) {
+      for (const [factIndex, fact] of project.facts.entries()) {
         const item = document.createElement("details");
-        item.append(text("summary", `${fact.fact_type} · ${fact.content}`),
+        item.append(text("summary", `候选事实 ${factIndex + 1} · ${fact.fact_type}`), text("p", fact.content),
           text("p", `模型自评 ${Math.round(fact.confidence * 100)}% · 原文引用：`, "material-help"),
           text("pre", fact.evidence_quote));
         for (const warning of fact.needs_confirmation) item.append(text("p", warning, "ai-warning"));
@@ -124,10 +129,10 @@ export function setupAiProjects({ request, run, getResume, isResumeDirty, notify
     if (!state.pending) state.pending = { request_id: crypto.randomUUID(), source_version: resume.content_version };
     render();
     notify("正在读取或提取项目。结果会保存为草稿，暂不创建项目；请稍候。");
-    const draft = await request(path(), {
+    const draft = await progress("正在提取 / 读取候选项目，尚未保存正式项目", () => request(path(), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.pending), timeoutMs: 330000,
-    });
+    }));
     if (draft.status !== "running") state.pending = null;
     state.selectedId = draft.id;
     state.offset = 0;
