@@ -286,6 +286,7 @@ def test_migration_round_trip_and_model_consistency(bank):
             "interview_plan",
             "interview_session",
             "interview_turn",
+            "interview_report",
         }
 
 

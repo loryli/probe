@@ -19,6 +19,8 @@ from interview_assistant.config import Settings
 from interview_assistant.database import Database
 from interview_assistant.interview.schemas import (
     AnswerSubmit,
+    ReportCreate,
+    ReportRead,
     SessionControl,
     SessionCreate,
     SessionList,
@@ -327,3 +329,45 @@ async def end_session(
     settings: SettingsDependency,
 ) -> SessionRead:
     return await InterviewService(session, settings).end(str(session_id), payload)
+
+
+@router.get(
+    "/{session_id}/report", response_model=ReportRead,
+    summary="读取整场复盘；没有生成过时返回 404",
+    responses={404: {"description": "场次不存在或尚未生成复盘"}},
+)
+async def get_report(
+    session_id: UUID, session: SessionDependency, settings: SettingsDependency,
+) -> ReportRead:
+    report = await InterviewService(session, settings).get_report(str(session_id))
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "report_not_found", "message": "还没有生成过复盘"},
+        )
+    return report
+
+
+@router.post(
+    "/{session_id}/report", response_model=ReportRead, status_code=status.HTTP_201_CREATED,
+    summary="为已结束的场次生成整场复盘；每场一份，失败可重试",
+    responses={
+        200: {"model": ReportRead, "description": "重放已生成的复盘，直接返回原报告"},
+        409: {"description": "场次尚未结束"},
+    },
+)
+async def create_report(
+    session_id: UUID,
+    payload: ReportCreate,
+    response: Response,
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> ReportRead:
+    """同步生成（一次模型调用，约 10–30 秒）；已生成过则直接返回原报告。"""
+    report, created = await InterviewService(session, settings).report(
+        str(session_id), payload,
+    )
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return report
+

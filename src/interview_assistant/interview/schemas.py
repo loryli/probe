@@ -320,3 +320,146 @@ class PlanOption(BaseModel):
 class SessionOptions(BaseModel):
     plans: list[PlanOption]
     model: dict[str, object]
+
+
+class ReportCreate(InputModel):
+    request_id: UUID = Field(description="复盘幂等键；重放同一标识返回已生成的报告")
+
+
+class ReportEvaluation(BaseModel):
+    """复盘里对一个考察目标的评价；turn_sequences 是支撑证据的回答轮次号。"""
+
+    objective_id: str = Field(max_length=40)
+    status: Literal["covered", "partial", "missed"]
+    comment: str = Field(default="", max_length=400)
+    highlights: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    turn_sequences: list[int] = Field(default_factory=list)
+
+
+class ReportContent(InputModel):
+    """落库的复盘内容；source 说明它来自模型还是规则统计。"""
+
+    schema_version: Literal["interview_report.v1"] = "interview_report.v1"
+    overall: Literal["solid", "mixed", "weak"] = "mixed"
+    summary: str = Field(default="", max_length=600)
+    evaluations: list[ReportEvaluation] = Field(default_factory=list)
+    weak_topics: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class ReportDraft(ReportContent):
+    """模型一次产出的整场复盘；normalize 容忍字段名与形态偏差。"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        cleaned: dict[str, object] = {
+            key: value for key, value in data.items()
+            if key in {
+                "overall", "summary", "evaluations", "weak_topics",
+                "suggestions", "risks",
+            }
+        }
+        if isinstance(cleaned.get("summary"), str):
+            cleaned["summary"] = cleaned["summary"].strip()[:600]
+        overall = cleaned.get("overall")
+        if isinstance(overall, str):
+            lowered = overall.strip().lower()
+            cleaned["overall"] = lowered if lowered in {"solid", "mixed", "weak"} else "mixed"
+        evaluations: list[dict[str, object]] = []
+        for raw in cleaned.get("evaluations") or []:
+            if not isinstance(raw, dict):
+                continue
+            objective_id = raw.get("objective_id") or raw.get("id") or raw.get("objective")
+            if not isinstance(objective_id, str) or not objective_id.strip():
+                continue
+            status = raw.get("status") or raw.get("coverage")
+            status = status.strip().lower() if isinstance(status, str) else ""
+            if status not in {"covered", "partial", "missed"}:
+                status = "partial"
+            comment = raw.get("comment") or raw.get("evaluation") or ""
+            highlights = [
+                item.strip()[:200] for item in _string_list(raw.get("highlights"))
+                if item.strip()
+            ][:4]
+            gaps = [
+                item.strip()[:200] for item in _string_list(raw.get("gaps"))
+                if item.strip()
+            ][:4]
+            sequences = [
+                int(item) for item in _string_list(raw.get("turn_sequences"))
+                if str(item).strip().lstrip("-").isdigit()
+            ][:8]
+            evaluations.append({
+                "objective_id": objective_id.strip()[:40],
+                "status": status,
+                "comment": str(comment).strip()[:400],
+                "highlights": highlights,
+                "gaps": gaps,
+                "turn_sequences": sequences,
+            })
+        cleaned["evaluations"] = evaluations
+        cleaned["weak_topics"] = [
+            _topic_text(item) for item in _string_list(cleaned.get("weak_topics"))
+            if _topic_text(item)
+        ][:5]
+        cleaned["suggestions"] = [
+            item.strip()[:200] for item in _string_list(cleaned.get("suggestions"))
+            if item.strip()
+        ][:5]
+        cleaned["risks"] = [
+            item.strip()[:200] for item in _string_list(cleaned.get("risks"))
+            if item.strip()
+        ][:5]
+        return cleaned
+
+
+def _string_list(value: object) -> list[str]:
+    """容忍模型把字符串列表写成对象列表、单个字符串或逗号串。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, dict):
+        for key in ("topic", "detail", "text", "note"):
+            if isinstance(value.get(key), str):
+                return [value[key]]
+        return []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                items.append(item)
+            elif isinstance(item, dict):
+                for key in ("topic", "detail", "text", "note"):
+                    if isinstance(item.get(key), str):
+                        items.append(item[key])
+                        break
+        return items
+    return []
+
+
+def _topic_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()[:120]
+    if isinstance(value, dict):
+        parts = [str(value.get(key) or "").strip() for key in ("topic", "detail")]
+        return "：".join(part for part in parts if part)[:200]
+    return ""
+
+
+class ReportRead(BaseModel):
+    id: UUID
+    session_id: UUID
+    status: Literal["ready", "failed"]
+    source: Literal["model", "rule"]
+    report: ReportContent | None
+    stats: dict[str, int]
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime

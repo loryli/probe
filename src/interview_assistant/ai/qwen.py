@@ -62,6 +62,7 @@ class QwenModel:
     async def generate(
         self, *, messages: Sequence[ModelMessage], output_type: type[OutputModel],
         prompt_version: str, schema_version: str, temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> OutputModel:
         settings = self.settings
         if not configuration_status(settings)["configured"]:
@@ -73,7 +74,7 @@ class QwenModel:
             "messages": [{"role": message.role, "content": message.content} for message in messages]
             + [{"role": "user", "content": "请仅返回符合以下 JSON Schema 的 JSON 对象：\n" + schema}],
             "response_format": {"type": "json_object"},
-            "max_tokens": settings.qwen_max_output_tokens,
+            "max_tokens": max_tokens or settings.qwen_max_output_tokens,
             "stream": False,
         }
         if settings.qwen_enable_thinking is not None:

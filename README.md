@@ -2,7 +2,7 @@
 
 个人自用的 AI 面试练习工具，首发面向大模型应用开发 / AI 全栈。根据简历项目与个人题库动态提问，用带来源证据的记录复盘。
 
-目前已实现 **后端基础骨架、个人题库、简历与项目、面试计划（Planner）与文字模拟面试的页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存，固定资料版本的考察目标与预算规划，以及按已确认计划逐轮提问、保存回答的文字面试最小闭环。页面直接操作后端保存的数据。实时事件、逐轮分析与复盘、记忆尚未实现。项目设计见 [设计文档入口](docs/README.md)。
+目前已实现 **后端基础骨架、个人题库、简历与项目、面试计划（Planner）与文字模拟面试的页面及 API**：题库 CRUD、内容历史、Markdown 预览导入，PDF 原件保存、文字提取与本地 OCR、简历版本、项目事实维护、Qwen 项目提取草稿与人工确认保存，固定资料版本的考察目标与预算规划，以及按已确认计划逐轮提问、保存回答、逐字流式出题与整场复盘的文字面试闭环。页面直接操作后端保存的数据。逐轮后台分析与记忆尚未实现。项目设计见 [设计文档入口](docs/README.md)。
 
 ## 当前基础架构
 
@@ -210,6 +210,7 @@ Planner 决定后续提问水平，也影响语音对答的反应速度，因此
 8. 规则模式完全本地运行：项目题按事实模板生成，追问按回答长度判断，用于无密钥核对闭环。规则模式不做语义判断，提问质量明显低于模型模式；它没有流式增量，一次把整句推给页面。
 9. 同一份计划重复练习时每场问题不同：目标顺序（同优先级内）、题库取题顺序、项目事实顺序都由**场次 ID 派生**的顺序决定，同场次内稳定可复现，不同场次不同；题库题还会按同计划历史场次的出现次数排序，没问过的排前面。模型模式的判定与出题温度由 `INTERVIEW_QWEN_INTERVIEW_TEMPERATURE`（默认 0.8）控制，并把本场已问题目与同计划历史场次的近期问题一起发过去，明确要求换角度、不重复。考察目标本身不随机——每场覆盖的目标集合与完成标准仍来自冻结计划。
 10. 首字延迟与整段延迟分开看：流式路径下第一个字通常在 1 秒左右到达，整句 1.5–3 秒说完（qwen-plus 实测：首帧 0.5s、`say` 从 0.8s 起逐字流出、单轮全程约 2s）。**Qwen 客户端默认忽略系统代理**（`INTERVIEW_QWEN_TRUST_ENV=false`）：本地代理软件会把 DashScope 延迟放大 5 倍左右，流式效果直接退化成"等几秒后整句蹦出"，这是本机部署最常见的假故障。确需走代理时显式设 `INTERVIEW_QWEN_TRUST_ENV=true`。输入也做过裁剪（每个目标最多 5 条事实、每条 280 字，最近 3 轮对话，已问/历史问题各 4 条），因为预填长度直接计入首字延迟；流式调用的 token 用量经 `stream_options` 随最后一帧返回并落库。
+11. **整场复盘（Offline Path）已落地**：场次结束后在页面点「生成复盘报告」，一次模型调用（同步等待约 15–40 秒）产出 `interview_report.v1`——整体达成度（solid/mixed/weak）、120 字摘要、逐目标评价（covered/partial/missed、亮点与缺口、证据轮次引用）、弱项主题、下次练习建议与矛盾/待核验线索。每场一份：重放同一 `request_id` 或已有成品都直接返回，不重复调用；失败落库为可重试状态，不影响问答记录。规则模式或未配置密钥时降级为统计报告（覆盖数、每目标问答索引），提示用模型模式获取语义评价。题库目标的标准答案**只在复盘阶段**作为对照参考发给模型；实时面试仍不发送。
 
 「回答先保存再调用模型、请求防重复、写回前检查场次状态」这三条是本轮的设计前提，后续加 SSE、断线重连与后台分析时不应绕过。
 
@@ -228,8 +229,10 @@ Planner 决定后续提问水平，也影响语音对答的反应速度，因此
 | `POST /interviews/{id}/pause`、`POST /interviews/{id}/resume` | 提交 `expected_revision`，暂停或继续。 |
 | `POST /interviews/{id}/skip` | 提交 `expected_revision`，跳过当前目标并生成下一问。 |
 | `POST /interviews/{id}/end` | 提交 `expected_revision`，结束场次并保留全部问答与目标进度。 |
+| `POST /interviews/{id}/report` | 为**已结束**的场次同步生成整场复盘（约 15–40 秒）；每场一份，重放同一 `request_id` 或已有成品直接返回（HTTP 200），新生成返回 201。失败返回报告的 `status=failed` 与错误信息，可用新 `request_id` 重试。 |
+| `GET /interviews/{id}/report` | 读取已生成的复盘；未生成过返回 404（`report_not_found`），进行中场次同样 404，生成用 POST。 |
 
-已知边界：逐字流式是**单进程内存通道**实现的——后台决策把增量写进进程内的 `LiveStream`，`answers/stream` 从它读出并转发，因此多 worker 部署需要换成共享通道（Redis 或事件表）。断开连接不会取消后台任务，重进页面能拿到落库结果，但**已经流过的中间文字不会重放**（`GET /events` 只推完整快照）。`GET /events` 仍是轮询数据库的降级实现（每 0.35 秒比对一次），用于刷新后汇合，不是事件总线。后台任务随进程存活，服务重启会让进行中的一轮停在「重试下一步」，需手动续接。模型失败时已流出的文字保留，页面按 `error` 帧提示。本轮不提供逐轮后台分析、复盘、记忆候选，也不提供删除场次；暂停时长计入已用时间。暂停或结束会丢弃迟到的决策结果，恢复后需要点「重试下一步」。面试侧的标准答案仅保留在快照与会话中，当前不发送给模型。升级前生成的 `planner.v1` 计划（没有 `candidate_scope`、项目 revision、事实证据原文与题目原文）不能用于面试，也无法就地升级：只能按当前配置重新生成并确认，旧计划保留供回看。
+已知边界：逐字流式是**单进程内存通道**实现的——后台决策把增量写进进程内的 `LiveStream`，`answers/stream` 从它读出并转发，因此多 worker 部署需要换成共享通道（Redis 或事件表）。断开连接不会取消后台任务，重进页面能拿到落库结果，但**已经流过的中间文字不会重放**（`GET /events` 只推完整快照）。`GET /events` 仍是轮询数据库的降级实现（每 0.35 秒比对一次），用于刷新后汇合，不是事件总线。后台任务随进程存活，服务重启会让进行中的一轮停在「重试下一步」，需手动续接。模型失败时已流出的文字保留，页面按 `error` 帧提示。复盘为同步生成（一次调用约 15–40 秒），暂无流式与后台队列；模型失败保留 failed 状态可重试，不丢整场记录。本轮不提供逐轮后台分析、记忆候选，也不提供删除场次；暂停时长计入已用时间。暂停或结束会丢弃迟到的决策结果，恢复后需要点「重试下一步」。面试侧的标准答案仅保留在快照与会话中，实时提问不发送给模型；复盘阶段会作为对照参考随题库目标一起发送。升级前生成的 `planner.v1` 计划（没有 `candidate_scope`、项目 revision、事实证据原文与题目原文）不能用于面试，也无法就地升级：只能按当前配置重新生成并确认，旧计划保留供回看。
 
 ## 使用 Apifox 调试
 
@@ -277,7 +280,7 @@ INTERVIEW_DATABASE_URL=mysql+aiomysql://interview:password@127.0.0.1:3306/interv
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`，面试计划的 `interview_plan`，以及文字面试的 `interview_session`、`interview_turn`（当前 head 为 `0008_interview_outline`，为场次增加基础问题骨架 `outline_json`）。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
+迁移包含题库的 `question`、`question_version`、`question_metadata`、`markdown_import`、`question_import_source`，资料管理的 `resume_document`、`resume_extraction`、`resume_parse_draft`、`resume`、`resume_version`、`project`、`project_fact`，面试计划的 `interview_plan`，以及文字面试的 `interview_session`、`interview_turn`、`interview_report`（当前 head 为 `0009_interview_report`，新增整场复盘表：每场一份报告，`session_id` 与 `request_key` 均唯一，失败行可被重试覆盖）。现有本地 SQLite 在下次启动时自动升级，已有题目与版本保留。MySQL 不在应用启动时自动建库、建表或运行迁移，更新后仍需手动执行迁移命令。可用 `python -m alembic current` 查看当前数据库版本；`python -m alembic upgrade head --sql` 按当前配置离线生成 SQL，`python -m alembic -x dialect=mysql upgrade head --sql` 可在未配置 MySQL 时预览它的 SQL。
 
 `.env`、虚拟环境与 `data/` 不进入版本控制。请勿将简历、题库、数据库凭据或模型密钥加入源码仓库。
 
@@ -379,6 +382,6 @@ Markdown 首版切分与预览行为见上文；更复杂的笔记格式后续�
 
 ## 本轮交接
 
-- **本轮完成项**：修「没有流式效果」。实测定位链路各环节都正常（打桩端到端：ack 后 delta 按 0.1s 逐帧到达；直连 qwen-plus 流式：首帧 0.5s、`say` 从 0.8s 逐字流出），唯独走服务的真实请求要 9–10.5s 才出第一批 `delta`。对比三种网络路径确诊根因：**本机系统代理（127.0.0.1:65532）把 DashScope 延迟放大 5 倍**（同一请求直连首块 0.36s、走代理 2.79s），服务进程继承了代理环境变量，前 9 秒模型还在慢速生成前两个判定字段，`say` 到第 9 秒才开始流，页面上就是「等很久然后文字一口气蹦出」。修复：新增 `Settings.qwen_trust_env`（默认 `false`，env `INTERVIEW_QWEN_TRUST_ENV`），`QwenModel` 的流式与非流式客户端都 `trust_env=False` 直连 DashScope；确需代理可显式打开。顺带给流式请求补 `stream_options={"include_usage": true}`，token 用量随最后一帧返回并落库（此前流式轮次的 `input_tokens/output_tokens` 一直是 NULL）。实测收尾：对运行中的服务（--reload 已自动生效）新开一场端到端验证——ack 0.15s、**首个 delta 0.97s**、收尾 state 1.63s（修复前 9.27s/10.84s），tokens 1986/88 落库。
-- **遗留问题**：本轮为确诊与验收做了 6 次真实模型调用（3 次最小探针 + 1 次真实决策输入 + 1 场端到端，均在用户报修的范围内），未跑 pytest / 浏览器。测试场次 `c33702c5…`（计划 `70446eb0…`）留在库里可回看或直接结束。上一轮的 3 个无首问空场次仍在（`d22aafdb…`、`68869fab…`、`76018c98…`），点「继续生成下一问」可补或「结束」清掉。代理绕过是**进程内修复**：如果以后 `qwen_base_url` 改成必须走代理的地址，需要设 `INTERVIEW_QWEN_TRUST_ENV=true`。其余同前：流式通道单进程内存实现、断线不重放中间文字、`say` 的位置依赖模型按 schema 顺序输出（当前实测 qwen-plus 稳定遵守）。
-- **下一步**：在页面上实际打一场，体验逐字流式是否达到预期（提交后约 1 秒开始逐字、2 秒内说完）。之后做整场复盘（聚合 `interview_turn.decision_json`）与事件持久化（多 worker、断线重放）。每轮交付后按同样三段格式更新本节。
+- **本轮完成项**：实现**整场复盘（Offline Path）**。新表 `interview_report`（迁移 `0009`，`session_id`/`request_key` 双唯一，失败行可被重试覆盖）+ 契约 `interview_report.v1`（overall/summary/逐目标评价/弱项/建议/待核验，normalize 容忍字段名与形态偏差，编造的目标 ID 被过滤）+ 端点 `POST /interviews/{id}/report`（同步生成、幂等重放、进行中场次 409）与 `GET /interviews/{id}/report`。输入按 docs/03 Offline Path 组装：目标定义（含完成规则与 2 条事实）、全部问答（每轮问题 200 字/回答 600 字/当时的 objective_status），题库目标附标准答案对照（**仅复盘阶段发送**）；输出 `max_tokens=2000`（顺带给非流式 `generate()` 补了 `max_tokens` 参数）。规则模式/未配密钥降级为统计报告。前端：结束面板下方新增「生成复盘报告」区（加载提示 15–40 秒）、报告视图（整体徽章、逐目标卡片带亮点/缺口/证据轮次、弱项/建议/待核验、失败重试），回看已结束场次自动拉取已有报告。验证：迁移随服务 reload 自动应用到本地库；打桩端到端 6 项全过（409/404/201/幂等重放/ready 不重复调用/GET）；真实模型用你实打的那场（15 轮）生成 34.4s，报告准确指出三轮答非所问的目标为 missed、两个 covered 目标的具体缺口与可执行建议；幂等重放确认不重复调用。
+- **遗留问题**：**需要重启一次服务**——uvicorn `--reload` 在 Windows 上没有杀掉旧 worker（11:52 启动的进程仍在 accept 8000 端口），与 13:17 的新 worker 并存，请求随机落到旧进程时会得到裸 404。请在终端 Ctrl+C 停掉 uvicorn 后重新启动，复盘页面功能即可稳定。本轮为验收做了 3 次真实模型调用（一场完整复盘 ×2 环境 + 一次幂等确认不调用），未跑 pytest / 浏览器。本地库 `8b0efb9c…` 已带一份真实复盘可回看；你实打的 `2608a5b0…` 还在进行中，结束后即可生成复盘。其余同前：流式通道单进程内存实现、断线不重放中间文字、三个无首问空场次仍在。
+- **下一步**：重启服务后在页面走一遍闭环：结束 `2608a5b0…` 那场 → 点「生成复盘报告」→ 核对评价是否贴合你的实际回答。之后候选：复盘流式输出（报告文字较长，同步等 34 秒偏久）、事件持久化（多 worker、断线重放）、逐轮后台分析与记忆候选。每轮交付后按同样三段格式更新本节。

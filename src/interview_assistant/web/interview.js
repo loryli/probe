@@ -4,7 +4,7 @@ const pageSize = 10;
 const state = {
   options: null, sessions: [], total: 0, offset: 0,
   session: null, busy: false, timer: null, waitTimer: null, fetchedAt: 0,
-  stream: null, live: false,
+  stream: null, live: false, report: null, reportBusy: false,
 };
 
 const statusLabels = { active: "进行中", paused: "已暂停", completed: "已结束" };
@@ -308,11 +308,21 @@ async function openSession(id) {
     const session = await request(`${base}/${id}`);
     state.session = session;
     state.fetchedAt = Date.now();
+    state.report = null;
     $("answer-text").value = "";
     showRoom();
     renderSession(session);
     renderSessionList();
     startTimer();
+    // 已结束的场次顺带读一次复盘；没有生成过（404）就保持无报告状态。
+    if (session.status === "completed") {
+      request(`${base}/${id}/report`).then((report) => {
+        if (state.session && state.session.id === session.id) {
+          state.report = report;
+          renderReportArea(session);
+        }
+      }).catch(() => {});
+    }
     // 刷新时若上一轮决策还在后台跑，直接续订进度，而不是让用户点重试。
     if (session.status === "active" && session.pending_turn_id && !session.current_turn) {
       startWait("上一条回答已保存，正在等待下一步…");
@@ -780,6 +790,136 @@ function renderSummary(session) {
   again.type = "button";
   again.addEventListener("click", showStart);
   node.append(again);
+  renderReportArea(session);
+}
+
+const overallLabels = { solid: "整体扎实", mixed: "有亮点有短板", weak: "证据明显不足" };
+const evaluationLabels = { covered: "已覆盖", partial: "部分覆盖", missed: "未覆盖" };
+
+function renderReportArea(session) {
+  const node = $("room-report");
+  if (!node || !session || session.status !== "completed") {
+    if (node) { node.hidden = true; node.replaceChildren(); }
+    return;
+  }
+  node.hidden = false;
+  node.replaceChildren();
+  const report = state.report;
+  if (state.reportBusy) {
+    node.append(element("p", "正在复盘整场（约 15–40 秒）：逐目标评价、弱项与练习建议生成后会显示在这里。", "report-loading"));
+    return;
+  }
+  if (report && report.status === "ready" && report.report) {
+    renderReport(node, report, session);
+    return;
+  }
+  if (report && report.status !== "ready") {
+    node.append(element("h3", "复盘没有生成成功"));
+    node.append(element("p", `${report.error_message || report.error_code || "生成失败"}。问答记录已保存，可以直接重试。`, "report-failed"));
+    const retry = element("button", "重试生成复盘 ↗", "button");
+    retry.type = "button";
+    retry.addEventListener("click", generateReport);
+    node.append(retry);
+    return;
+  }
+  const intro = element("p", "让 Qwen 复盘整场问答：逐目标评价达成度、指出弱项与矛盾，并给出下次练习建议。题库题会对照你自己保存的标准答案。", "report-intro");
+  const start = element("button", "生成复盘报告 ↗", "button primary");
+  start.type = "button";
+  start.addEventListener("click", generateReport);
+  node.append(element("h3", "整场复盘"), intro, start);
+}
+
+function renderReport(node, report, session) {
+  const content = report.report;
+  const head = element("div", null, "report-head");
+  const badge = element("span", overallLabels[content.overall] || content.overall, `report-badge ${content.overall}`);
+  head.append(element("h3", "整场复盘"), badge);
+  node.append(head);
+  if (content.summary) node.append(element("p", content.summary, "report-summary"));
+  const objectiveById = new Map(session.objectives.map((item) => [item.id, item]));
+  if (content.evaluations.length) {
+    const list = element("div", null, "report-objectives");
+    for (const item of content.evaluations) {
+      const objective = objectiveById.get(item.objective_id);
+      const card = element("article", null, "report-card");
+      const title = element("h4", `${item.objective_id} · ${objective ? objective.topic : "未知目标"}`);
+      const stateBadge = element("span", evaluationLabels[item.status] || item.status, `report-badge small ${item.status}`);
+      title.append(stateBadge);
+      card.append(title);
+      if (item.comment) card.append(element("p", item.comment));
+      if (item.highlights.length) {
+        const block = element("div", null, "report-points good");
+        block.append(element("strong", "亮点"));
+        for (const point of item.highlights) block.append(element("p", point));
+        card.append(block);
+      }
+      if (item.gaps.length) {
+        const block = element("div", null, "report-points bad");
+        block.append(element("strong", "缺口"));
+        for (const point of item.gaps) block.append(element("p", point));
+        card.append(block);
+      }
+      if (item.turn_sequences.length) {
+        card.append(element("small", `证据轮次：第 ${item.turn_sequences.join("、")} 轮回答`));
+      }
+      list.append(card);
+    }
+    node.append(list);
+  }
+  const sections = [
+    ["weak_topics", "弱项主题"],
+    ["suggestions", "下次练习建议"],
+    ["risks", "矛盾与待核验"],
+  ];
+  for (const [key, title] of sections) {
+    const items = content[key];
+    if (!items || !items.length) continue;
+    const block = element("div", null, "report-section");
+    block.append(element("h4", title));
+    const list = element("ul");
+    for (const item of items) list.append(element("li", item));
+    block.append(list);
+    node.append(block);
+  }
+  const footer = element("div", null, "report-footer");
+  const again = element("button", "重新生成复盘 ↗", "text-button");
+  again.type = "button";
+  again.addEventListener("click", generateReport);
+  footer.append(
+    element("small", `来源：${report.source === "model" ? "Qwen 复盘" : "规则统计"} · ${formatDate(report.updated_at)}`),
+    again,
+  );
+  node.append(footer);
+}
+
+async function generateReport() {
+  const session = state.session;
+  if (!session || state.reportBusy) return;
+  state.reportBusy = true;
+  renderReportArea(session);
+  try {
+    const report = await request(`${base}/${session.id}/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: crypto.randomUUID() }),
+      timeoutMs: 180000,
+    });
+    state.report = report;
+  } catch (error) {
+    report_error(error, session);
+  } finally {
+    state.reportBusy = false;
+    renderReportArea(state.session || session);
+  }
+}
+
+function report_error(error, session) {
+  if (error instanceof ApiError && error.status === 0) {
+    state.report = { status: "failed", error_code: "network", error_message: "连接中断，复盘可能仍在生成" };
+    return;
+  }
+  notify(error.message || "复盘生成失败，请稍后重试。", true);
+  if (session) state.report = { status: "failed", error_code: "failed", error_message: error.message || "" };
 }
 
 function bind() {

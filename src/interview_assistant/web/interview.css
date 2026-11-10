@@ -105,6 +105,36 @@
 
 #plan-hint.error { color: #9a6247; }
 
+.room-report { margin-top: 14px; border: 1px solid #cfe0c6; background: #fbfdf8; border-radius: 9px; padding: 18px 20px; }
+.room-report h3 { margin: 0 0 8px; font-size: 15px; }
+.room-report .report-intro, .room-report .report-loading { font-size: 13px; line-height: 1.8; color: #5a6b55; margin: 6px 0 12px; }
+.room-report .report-loading { color: #6a7d64; font-style: italic; }
+.room-report .report-failed { font-size: 13px; line-height: 1.8; color: #9a6247; margin: 6px 0 12px; }
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.report-badge { display: inline-block; border-radius: 999px; padding: 3px 11px; font-size: 12px; font-weight: 600; }
+.report-badge.solid { background: #e2f0dd; color: #2f5d2a; }
+.report-badge.mixed { background: #f4ecd6; color: #7a5c1e; }
+.report-badge.weak { background: #f4ded6; color: #8a4630; }
+.report-badge.small { font-size: 11px; padding: 2px 9px; margin-left: 8px; vertical-align: 1px; }
+.report-badge.small.covered { background: #e2f0dd; color: #2f5d2a; }
+.report-badge.small.partial { background: #f4ecd6; color: #7a5c1e; }
+.report-badge.small.missed { background: #f4ded6; color: #8a4630; }
+.report-summary { font-size: 13px; line-height: 1.9; color: #3f5039; margin: 8px 0 14px; }
+.report-objectives { display: grid; gap: 10px; margin: 4px 0 14px; }
+.report-card { border: 1px solid #dbe8d2; background: #fff; border-radius: 7px; padding: 12px 14px; }
+.report-card h4 { margin: 0 0 6px; font-size: 13px; color: #254f45; }
+.report-card p { margin: 4px 0; font-size: 13px; line-height: 1.8; color: #4d6147; }
+.report-card small { display: block; margin-top: 7px; color: #849087; font-size: 11px; }
+.report-points { margin-top: 8px; padding: 8px 11px; border-radius: 6px; font-size: 12.5px; }
+.report-points strong { display: block; font-size: 11px; letter-spacing: 1px; color: #788575; margin-bottom: 3px; }
+.report-points p { margin: 2px 0; line-height: 1.7; color: #4d6147; }
+.report-points.good { background: #f0f7ec; }
+.report-points.bad { background: #faf3ec; }
+.report-section h4 { margin: 12px 0 6px; font-size: 13px; color: #254f45; }
+.report-section ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.9; color: #4d6147; }
+.report-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.report-footer small { color: #849087; font-size: 11px; }
+
 @media (max-width: 1100px) {
   .interview-page .bank { grid-template-columns: 240px minmax(0, 1fr); }
   .interview-start, .interview-room { padding: 22px; }

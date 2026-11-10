@@ -99,3 +99,34 @@ class InterviewTurn(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+class InterviewReport(Base):
+    """一场面试的整场复盘；每场最多一份，失败可重试覆盖。"""
+
+    __tablename__ = "interview_report"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_interview_report_session"),
+        UniqueConstraint("request_key", name="uq_interview_report_request"),
+        CheckConstraint(
+            "status IN ('ready', 'failed')", name="ck_interview_report_status",
+        ),
+        CheckConstraint(
+            "source IN ('model', 'rule')", name="ck_interview_report_source",
+        ),
+        Index("ix_interview_report_session", "session_id"),
+        table_options,
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="RESTRICT")
+    )
+    status: Mapped[str] = mapped_column(String(8))
+    source: Mapped[str] = mapped_column(String(8))
+    report_json: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON)
+    stats_json: Mapped[dict[str, JsonValue]] = mapped_column(JSON)
+    request_key: Mapped[str] = mapped_column(String(36))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
