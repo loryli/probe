@@ -41,13 +41,18 @@ class SessionControl(InputModel):
 
 
 class DecisionDraft(InputModel):
-    """模型只做本轮判断与措辞；是否追问、切目标与收尾由服务端按配额决定。"""
+    """模型只做本轮判断与措辞；是否追问、切目标与收尾由服务端按配额决定。
 
-    schema_version: Literal["interview_decision.v1"] = "interview_decision.v1"
+    字段顺序即输出顺序：判定字段在前，`say` 紧随其后，其余元数据在后。
+    这样流式调用可以先拿到判定，再把面试官要说的话逐字流出来。
+    """
+
+    schema_version: str = Field(default="interview_decision.v2", max_length=32)
     objective_status: Literal["covered", "partial", "insufficient"]
     follow_up_needed: bool = False
-    follow_up_question: str = Field(default="", max_length=300)
+    say: str = Field(default="", max_length=300)
     next_objective_id: str = Field(default="", max_length=16)
+    follow_up_question: str = Field(default="", max_length=300)
     next_question: str = Field(default="", max_length=300)
     observation: str = Field(default="", max_length=160)
     reason: str = Field(default="", max_length=80)
@@ -61,13 +66,13 @@ class DecisionDraft(InputModel):
         cleaned = {
             key: value for key, value in data.items()
             if key in {
-                "schema_version", "objective_status", "follow_up_needed",
+                "objective_status", "follow_up_needed", "say",
                 "follow_up_question", "next_objective_id", "next_question",
                 "observation", "reason",
             }
         }
         for key, limit in (
-            ("follow_up_question", 300), ("next_question", 300),
+            ("say", 300), ("follow_up_question", 300), ("next_question", 300),
             ("next_objective_id", 16), ("observation", 160), ("reason", 80),
         ):
             value = cleaned.get(key)
@@ -84,6 +89,11 @@ class DecisionDraft(InputModel):
         if isinstance(status, str):
             cleaned["objective_status"] = status.strip().lower()
         return cleaned
+
+    @property
+    def spoken(self) -> str:
+        """面试官真正要说出口的那一句；旧字段作为兼容回退。"""
+        return self.say or self.follow_up_question or self.next_question
 
 
 class QuestionDraft(InputModel):

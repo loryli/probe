@@ -45,7 +45,7 @@
             <form id="start-form" class="interview-form">
               <div class="field"><label for="plan-select">已确认的面试计划 <span class="required">*</span></label><select id="plan-select" required></select><p class="material-help" id="plan-hint">只列出已确认的计划；开始后资料与目标会冻结，不再跟随资料修改。</p><p class="material-help" id="plan-fix" hidden><a href="/planner">去「面试计划」页按当前配置重新生成并确认 ↗</a></p></div>
               <div class="field"><label for="session-mode">出题方式</label><select id="session-mode"><option value="model">Qwen 面试官（模型判断追问与切题）</option><option value="rule">规则模式（不调用模型）</option></select><p class="material-help" id="model-status">正在读取模型配置…</p></div>
-              <p class="material-help">开始时会一次生成各目标的基础问题（首次需等待十几秒）；之后切题直接取用，追问才调用模型。每题只问一件事，追问受总上限与单目标上限约束。</p>
+              <p class="material-help">开场会为第一个目标现生成两道基础问题，之后每轮直接接住你上一句作答。面试官的话逐字出现，回答先落库再生成。</p>
               <footer class="editor-actions"><span class="original-note">计划时长只作节奏参考，超过 5 分钟后在回答结束时收尾。</span><button class="button primary" id="start-session" type="submit">开始面试 ↗</button></footer>
             </form>
           </section>

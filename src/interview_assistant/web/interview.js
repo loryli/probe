@@ -4,6 +4,7 @@ const pageSize = 10;
 const state = {
   options: null, sessions: [], total: 0, offset: 0,
   session: null, busy: false, timer: null, waitTimer: null, fetchedAt: 0,
+  stream: null, live: false,
 };
 
 const statusLabels = { active: "进行中", paused: "已暂停", completed: "已结束" };
@@ -97,7 +98,66 @@ function stopWait() {
   if (state.waitTimer) clearInterval(state.waitTimer);
   state.waitTimer = null;
   $("answer-hint").textContent = "";
-  $("room-note").textContent = "回答会先保存，再调用模型决定下一步。";
+  $("room-note").textContent = "回答先落库，面试官的话随之逐字出现。";
+}
+
+// 回答提交后由服务端后台决策，这里订阅进度；拿到可作答状态就关流。
+function closeStream() {
+  if (state.stream) state.stream.close();
+  state.stream = null;
+  if (state.session) renderControls(state.session);
+}
+
+function subscribe(id) {
+  closeStream();
+  const stream = new EventSource(`${base}/${id}/events`);
+  state.stream = stream;
+  stream.addEventListener("state", async (event) => {
+    let updated;
+    try { updated = JSON.parse(event.data); } catch { return; }
+    if (!state.session || state.session.id !== id) return;
+    state.session = updated;
+    state.fetchedAt = Date.now();
+    renderSession(updated);
+    const settled = updated.status !== "active"
+      || Boolean(updated.current_turn) || Boolean(updated.error_code);
+    if (!settled) return;
+    closeStream();
+    stopWait();
+    await loadSessions();
+    if (updated.error_code) {
+      notify(`下一步没有生成成功：${updated.error_message || updated.error_code}。可点「重试下一步」。`, true);
+    }
+  });
+  stream.addEventListener("error", () => {
+    // 服务端正常关闭也会触发 error；只有仍挂在流上时才需要兜底。
+    if (state.stream !== stream) return;
+    closeStream();
+    pollUntilSettled(id);
+  });
+  if (state.session) renderControls(state.session);
+}
+
+// SSE 不可用（代理缓冲、断线）时退化为轮询，避免用户一直停在等待态。
+async function pollUntilSettled(id) {
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (!state.session || state.session.id !== id) return;
+    try {
+      const updated = await request(`${base}/${id}`);
+      if (updated.status !== "active" || updated.current_turn || updated.error_code) {
+        state.session = updated;
+        state.fetchedAt = Date.now();
+        stopWait();
+        renderSession(updated);
+        await loadSessions();
+        return;
+      }
+    } catch { return; }
+  }
+  stopWait();
+  notify("下一步生成超时，可点「重试下一步」继续。", true);
 }
 
 function showWelcome() {
@@ -107,11 +167,13 @@ function showWelcome() {
   const note = $("welcome-note");
   if (!state.options) return;
   note.textContent = planOptions().some((item) => item.usable)
-    ? "点击右上角「新建面试」选择计划开始；每题提交后先保存回答，再生成追问或下一题。"
+    ? "点击右上角「新建面试」选择计划开始；回答提交后先落库，面试官的话随即逐字出现。"
     : "已有的已确认计划都来自旧版规则，缺少模拟面试所需的运行依据；请先到「面试计划」页按当前配置重新生成并确认。";
 }
 
 function showStart() {
+  closeStream();
+  stopWait();
   state.session = null;
   clearInterval(state.timer);
   $("answer-text").value = "";
@@ -240,6 +302,8 @@ function renderSessionList() {
 async function openSession(id) {
   if (state.busy) return;
   setBusy(true);
+  closeStream();
+  stopWait();
   try {
     const session = await request(`${base}/${id}`);
     state.session = session;
@@ -249,6 +313,11 @@ async function openSession(id) {
     renderSession(session);
     renderSessionList();
     startTimer();
+    // 刷新时若上一轮决策还在后台跑，直接续订进度，而不是让用户点重试。
+    if (session.status === "active" && session.pending_turn_id && !session.current_turn) {
+      startWait("上一条回答已保存，正在等待下一步…");
+      subscribe(session.id);
+    }
   } catch (error) {
     report(error);
   } finally {
@@ -267,9 +336,9 @@ async function startSession(event) {
   }
   const planId = plan.id;
   setBusy(true);
-  // 创建场次会一次性生成每个目标的基础问题，这一步比单轮提问更久。
-  $("connection").textContent = "正在生成题单";
-  $("start-session").textContent = "正在生成题单…";
+  // 开场只为一个目标生成基础问题，等待与单轮出题同量级。
+  $("connection").textContent = "正在生成首问";
+  $("start-session").textContent = "正在生成首问…";
   try {
     const session = await request(base, {
       method: "POST",
@@ -308,40 +377,136 @@ async function submitAnswer() {
     $("answer-text").focus();
     return;
   }
+  closeStream();
+  state.live = true;
   setBusy(true);
-  startWait("正在保存回答并生成下一步…");
+  startWait("正在保存回答…");
+  let bubble = null;
+  let settled = false;
   try {
-    const updated = await request(`${base}/${session.id}/answers`, {
+    await readAnswerStream(session, text, {
+      ack(read) {
+        // 回答已落库：先确认保存，再开始逐字接收面试官的话。
+        state.session = read;
+        state.fetchedAt = Date.now();
+        $("answer-text").value = "";
+        renderSession(read);
+        bubble = beginBubble();
+        startWait("面试官正在说…");
+      },
+      delta(payload) {
+        if (!bubble) {
+          bubble = beginBubble();
+          // 第一个字到了就不必再显示等待秒数。
+          stopWait();
+        }
+        bubble.textNode.textContent += payload.text || "";
+        const box = $("conversation");
+        box.scrollTop = box.scrollHeight;
+      },
+      state(read) {
+        settled = true;
+        if (bubble) { bubble.card.remove(); bubble = null; }
+        state.session = read;
+        state.fetchedAt = Date.now();
+        stopWait();
+        renderSession(read);
+        loadSessions().catch(report);
+        if (read.error_code) {
+          notify(`回答已保存。下一步没有生成成功：${read.error_message || read.error_code}。可点「重试下一步」。`, true);
+        }
+      },
+      error(payload) {
+        settled = true;
+        notify(`回答已保存，但${payload.message || "下一步没有生成成功"}。可点「重试下一步」。`, true);
+      },
+    });
+  } catch (error) {
+    // 流建立失败时回答可能已经保存：回读一次再提示，避免用户重复提交。
+    report(error);
+  } finally {
+    if (bubble) bubble.card.remove();
+    state.live = false;
+    stopWait();
+    setBusy(false);
+    if (!settled) await refreshQuietly();
+  }
+}
+
+// 提交回答并逐帧读取：ack（已保存）、delta（面试官的话）、state（最终快照）、error。
+async function readAnswerStream(session, text, handlers) {
+  let response;
+  try {
+    response = await fetch(`${base}/${session.id}/answers/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({
         request_id: crypto.randomUUID(),
         turn_id: session.current_turn.id,
         answer_text: text,
       }),
-      timeoutMs: 180000,
+      signal: AbortSignal.timeout(300000),
     });
-    state.session = updated;
-    state.fetchedAt = Date.now();
-    $("answer-text").value = "";
-    stopWait();
-    renderSession(updated);
-    await loadSessions();
-    if (updated.error_code) {
-      notify(`回答已保存。下一步没有生成成功：${updated.error_message || updated.error_code}。可点「重试下一步」。`, true);
-    }
-  } catch (error) {
-    report(error);
-    await refreshQuietly();
-  } finally {
-    stopWait();
-    setBusy(false);
+  } catch {
+    throw new ApiError("连接失败或请求超时。回答可能已经保存，刷新本场记录即可确认。", 0);
   }
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null);
+    const detail = body?.detail;
+    throw new ApiError(
+      typeof detail?.message === "string" ? detail.message : "提交失败，请稍后重试。",
+      response.status, detail?.code,
+    );
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let index;
+    while ((index = buffer.indexOf("\n\n")) >= 0) {
+      dispatchFrame(buffer.slice(0, index), handlers);
+      buffer = buffer.slice(index + 2);
+    }
+  }
+  if (buffer.trim()) dispatchFrame(buffer, handlers);
+}
+
+function dispatchFrame(frame, handlers) {
+  let event = "message";
+  const data = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+  }
+  if (!data.length) return;
+  let payload;
+  try { payload = JSON.parse(data.join("\n")); } catch { return; }
+  const handler = handlers[event];
+  if (typeof handler === "function") handler(payload);
+}
+
+// 面试官开口前的占位气泡：逐字追加，结束时被真实轮次替换。
+function beginBubble() {
+  const box = $("conversation");
+  const placeholder = box.querySelector(".list-placeholder");
+  if (placeholder) placeholder.remove();
+  const card = element("article", null, "turn question streaming");
+  const head = element("div", null, "turn-head");
+  head.append(element("span", "面试官正在说"));
+  const textNode = element("p", "", "turn-text");
+  card.append(head, textNode);
+  box.append(card);
+  box.scrollTop = box.scrollHeight;
+  return { card, textNode };
 }
 
 async function retryStep() {
   const session = state.session;
   if (!session || state.busy) return;
+  closeStream();
   setBusy(true);
   startWait("正在续接…");
   try {
@@ -366,6 +531,8 @@ async function control(action, confirmText) {
   const session = state.session;
   if (!session || state.busy) return;
   if (confirmText && !window.confirm(confirmText)) return;
+  closeStream();
+  stopWait();
   setBusy(true);
   try {
     const updated = await request(`${base}/${session.id}/${action}`, {
@@ -517,13 +684,16 @@ function renderControls(session) {
   const paused = session.status === "paused";
   const completed = session.status === "completed";
   const hasQuestion = Boolean(session.current_turn);
+  const streaming = Boolean(state.stream) || state.live;
   $("answer-box").hidden = !(active && hasQuestion);
   $("skip-objective").hidden = !(active && hasQuestion);
   $("pause-session").hidden = !active;
   $("resume-session").hidden = !paused;
   $("retry-step").hidden = !(active && !hasQuestion);
-  $("retry-step").textContent = session.pending_turn_id ? "重试下一步" : "继续生成下一问";
-  $("retry-step").disabled = state.busy;
+  $("retry-step").textContent = streaming
+    ? "正在生成下一步…"
+    : (session.pending_turn_id ? "重试下一步" : "继续生成下一问");
+  $("retry-step").disabled = state.busy || streaming;
   $("end-session").hidden = completed;
   $("submit-answer").disabled = state.busy;
   $("pause-session").disabled = state.busy;
@@ -532,7 +702,7 @@ function renderControls(session) {
   $("end-session").disabled = state.busy;
   $("room-note").textContent = completed
     ? "本场记录已保存，可回看每一轮问答。"
-    : "回答会先保存，再调用模型决定下一步。";
+    : "回答先落库，面试官的话随之逐字出现。";
 }
 
 function renderNotice(session) {
@@ -550,10 +720,11 @@ function renderNotice(session) {
   if (!session.current_turn) {
     notice.hidden = false;
     if (session.pending_turn_id) {
-      notice.className = "room-notice error";
+      const waiting = !session.error_code;
+      notice.className = waiting ? "room-notice" : "room-notice error";
       notice.textContent = session.error_code
         ? `回答已保存，但下一步没有生成成功：${session.error_message || session.error_code}。点「重试下一步」继续，不会重复保存回答。`
-        : "回答已保存，正在等待下一步。";
+        : (state.live ? "回答已保存，面试官正在说…" : "回答已保存，正在等待下一步。");
     } else {
       notice.className = session.error_code ? "room-notice error" : "room-notice";
       notice.textContent = session.error_code

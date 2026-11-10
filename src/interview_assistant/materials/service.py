@@ -17,7 +17,7 @@ from interview_assistant.materials.pdf import EXTRACTION_VERSION, OcrMode, PdfTe
 from interview_assistant.materials.schemas import (
     DocumentRead, FactInput, FactRead, ProjectCreate, ProjectList,
     ProjectRead, ProjectUpdate, ResumeCreate, ResumeList, ResumeRead, ResumeSummary,
-    ResumeUpdate, VersionList, VersionRead, VersionSummary,
+    ResumeUpdate, VersionList, VersionSummary,
 )
 
 

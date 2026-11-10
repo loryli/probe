@@ -56,6 +56,16 @@
 .turn { border: 1px solid var(--line); border-radius: 9px; padding: 14px 16px; background: #fdfefb; overflow-wrap: anywhere; }
 .turn.question { border-left: 3px solid #6e8c55; }
 .turn.answer { background: #f7f9f3; border-left: 3px solid #c6d3bd; }
+/* 逐字输出的气泡：光标跟随最后一句，结束后被真实轮次替换。 */
+.turn.streaming { border-left-style: dashed; background: #fbfcf8; }
+.turn.streaming .turn-head { color: #6e8c55; }
+.turn.streaming .turn-text:not(:empty)::after {
+  content: "▍"; margin-left: 2px; color: #7d9a63; animation: caret-blink 1s steps(1) infinite;
+}
+.turn.streaming .turn-text:empty::before {
+  content: "…"; color: #9aa793;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
 .turn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: #849087; margin-bottom: 8px; }
 .turn-text { font-size: 14px; line-height: 1.9; white-space: pre-wrap; margin: 0; color: #32462f; }
 .turn.answer .turn-text { color: #4a5a45; }
