@@ -1,9 +1,10 @@
+import { renderRecord } from "./record_view.js?v=20261110-4";
 const $ = (id) => document.getElementById(id);
 const base = "/interview-plans";
 const pageSize = 10;
 const state = {
   options: null, plans: [], planTotal: 0, planOffset: 0,
-  plan: null, selectedProjects: null, selectedQuestions: null,
+  plan: null, editing: false, selectedProjects: null, selectedQuestions: null,
   pendingId: null, busy: false, dirty: false, progressTimer: null,
 };
 
@@ -63,7 +64,7 @@ function configDrift() {
 }
 
 function refreshConfirmState(plan = state.plan) {
-  const ready = Boolean(plan) && plan.status === "ready";
+  const ready = Boolean(plan) && plan.status === "ready" && !state.editing;
   const outdated = ready && plan.schema_version !== planContractVersion;
   const drift = ready && !outdated && configDrift();
   $("confirm-plan").hidden = !ready;
@@ -142,6 +143,7 @@ function setBusy(value) {
   }
   $("new-plan").disabled = value;
   refreshConfirmState();
+  updatePlanMode();
 }
 
 function startProgress() {
@@ -363,7 +365,7 @@ function renderResultHeader(plan) {
     ? `已于 ${formatDate(plan.confirmed_at)} 确认保存，资料引用已固定。`
     : "目标时长仅作节奏参考，到时不强制结束。";
   $("delete-plan").hidden = false;
-  $("generate-plan").textContent = "按当前输入重新生成 ↗";
+  $("generate-plan").textContent = "生成新计划 ↗";
   $("plan-conflict").hidden = true;
 }
 
@@ -446,6 +448,7 @@ function buildReferenceDetails(objective, plan) {
 }
 
 function renderPlan(plan) {
+  updatePlanMode();
   $("plan-result").hidden = false;
   renderResultHeader(plan);
   clearResultBody();
@@ -550,10 +553,13 @@ function renderPlan(plan) {
 }
 
 async function selectPlan(id) {
-  if (state.busy) return;
+  if (state.busy || !canLeavePlan()) return;
+  setBusy(true);
   try {
     const plan = await request(`${base}/${id}`);
     state.plan = plan;
+    if (plan.status === "running") state.pendingId = plan.id;
+    state.editing = false;
     showWorkspace();
     await loadOptions(plan.resume_id, plan.source_version, { selection: plan.inputs });
     fillForm(plan.inputs);
@@ -561,15 +567,20 @@ async function selectPlan(id) {
     renderPlanList();
     state.dirty = false;
     $("read-pending").hidden = !state.pendingId;
-    setBusy(false);
   } catch (error) {
     report(error);
+  } finally {
+    setBusy(false);
   }
 }
 
 async function newPlan() {
   if (state.busy) return;
+  if (state.pendingId) { notify("上一份计划的结果尚未确定，请先点击「读取本次结果」。", true); return; }
+  if (!canLeavePlan()) return;
+  state.editing = true;
   state.plan = null;
+  updatePlanMode();
   showWorkspace();
   $("plan-result").hidden = true;
   $("plan-title").textContent = "新建计划";
@@ -583,6 +594,7 @@ async function newPlan() {
   $("ratio").value = "50";
   $("ratio-value").textContent = "50%";
   $("followups").value = "0";
+  setBusy(true);
   try {
     await loadOptions(null, null, { reset: true, resetQuestions: true });
     renderPlanList();
@@ -590,12 +602,15 @@ async function newPlan() {
     notify("已载入可选资料。选择项目与题目后生成计划。");
   } catch (error) {
     report(error);
+  } finally {
+    setBusy(false);
+    $("direction").focus();
   }
 }
 
 async function generate(event) {
   event.preventDefault();
-  if (state.busy) return;
+  if (state.busy || !state.editing) return;
   const resumeId = $("resume-select").value;
   const version = Number($("version-select").value);
   if (!resumeId || !Number.isInteger(version) || version < 1) {
@@ -638,7 +653,8 @@ async function generate(event) {
       timeoutMs: 330000,
     });
     state.plan = plan;
-    state.pendingId = null;
+    state.editing = plan.status === "failed";
+    state.pendingId = plan.status === "running" ? plan.id : null;
     state.dirty = false;
     renderPlan(plan);
     notify(
@@ -666,6 +682,7 @@ async function readPending() {
   try {
     const plan = await request(`${base}/${planId}`);
     state.plan = plan;
+    state.editing = plan.status === "failed";
     // 仍在生成时保留待查询标识，允许稍后继续读取同一任务。
     if (plan.status !== "running") state.pendingId = null;
     $("read-pending").hidden = !state.pendingId;
@@ -710,6 +727,10 @@ async function deletePlan() {
   try {
     await request(`${base}/${state.plan.id}?expected_revision=${state.plan.revision}`, { method: "DELETE" });
     state.plan = null;
+    state.editing = false;
+    state.dirty = false;
+    $("planner-workspace").hidden = true;
+    $("planner-welcome").hidden = false;
     $("plan-result").hidden = true;
     $("delete-plan").hidden = true;
     await loadPlans();
@@ -720,6 +741,70 @@ async function deletePlan() {
     setBusy(false);
   }
 }
+
+
+function canLeavePlan() {
+  return !state.dirty || window.confirm("放弃本次未保存的计划配置？已保存的计划不会改变。");
+}
+
+function updatePlanMode() {
+  $("plan-form").hidden = !state.editing;
+  $("read-pending").hidden = !state.pendingId;
+  $("plan-record-view").hidden = state.editing || !state.plan;
+  $("edit-plan").hidden = state.editing || !state.plan;
+  $("edit-plan").disabled = state.busy || Boolean(state.pendingId) || state.plan?.status === "running";
+  $("cancel-plan").hidden = !state.editing;
+  $("cancel-plan").disabled = state.busy || Boolean(state.pendingId);
+  $("generate-plan").hidden = !state.editing;
+  $("generate-plan").disabled = state.busy || Boolean(state.pendingId);
+  $("delete-plan").hidden = !state.plan;
+  $("delete-plan").disabled = state.busy || state.plan?.status === "running";
+  $("read-pending").disabled = state.busy;
+  $("plan-mode").textContent = state.editing ? (state.plan ? "调整配置，生成新计划" : "新建计划") : "查看计划";
+  if (!state.editing && state.plan) {
+    const plan = state.plan;
+    renderRecord($("plan-record-view"), {
+      title: plan.inputs.direction || "面试计划",
+      meta: `${statusLabels[plan.status] || plan.status} · 简历 v${plan.source_version}`,
+      fields: [["预计时长", `${plan.inputs.duration_minutes} 分钟`], ["项目题时间比例", `${Math.round(plan.inputs.project_ratio * 100)}%`],
+        ["选用资料", `${plan.inputs.project_ids.length} 个项目 · ${plan.inputs.question_ids.length} 道题目`]],
+    });
+  }
+}
+
+$("edit-plan").addEventListener("click", () => {
+  if (state.busy || !state.plan) return;
+  state.editing = true;
+  state.dirty = false;
+  refreshConfirmState();
+  updatePlanMode();
+  $("direction").focus();
+});
+$("cancel-plan").addEventListener("click", async () => {
+  if (state.busy || !canLeavePlan()) return;
+  if (state.plan) {
+    const plan = state.plan;
+    setBusy(true);
+    try {
+      await loadOptions(plan.resume_id, plan.source_version, { selection: plan.inputs });
+      fillForm(plan.inputs);
+      state.dirty = false;
+      state.editing = false;
+      renderPlan(plan);
+      refreshConfirmState(plan);
+    } catch (error) { report(error); }
+    finally {
+      setBusy(false);
+      if (!state.editing) $("edit-plan").focus();
+    }
+  } else {
+    state.editing = false;
+    state.dirty = false;
+    $("planner-workspace").hidden = true;
+    $("planner-welcome").hidden = false;
+    $("new-plan").focus();
+  }
+});
 
 $("new-plan").addEventListener("click", newPlan);
 $("refresh-plans").addEventListener("click", async () => {
@@ -787,7 +872,7 @@ $("reload-plan").addEventListener("click", async () => {
   } catch (error) { report(error); }
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!state.dirty || state.busy) return;
+  if (!state.dirty && !state.busy && !state.pendingId) return;
   event.preventDefault();
   event.returnValue = "";
 });

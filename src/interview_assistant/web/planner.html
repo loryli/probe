@@ -6,27 +6,21 @@
   <meta name="color-scheme" content="light">
   <title>面试计划 · 练习场</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css">
-  <link rel="stylesheet" href="/assets/planner.css">
-  <script src="/assets/planner.js" type="module"></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/planner.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/theme.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/workspace.css?v=20261110-4">
+  <script src="/assets/planner.js?v=20261110-4" type="module"></script>
 </head>
 <body class="planner-page">
   <a class="skip-link" href="#main">跳到主内容</a>
-  <aside class="sidebar" aria-label="工作区导航">
-    <a class="brand" href="/"><img src="/assets/favicon.svg" width="38" height="38" alt=""><span>练习场<small>INTERVIEW WORKSPACE</small></span></a>
-    <div class="workspace-label">个人工作区 <span>V1</span></div>
-    <nav><a class="nav-item" href="/"><span aria-hidden="true">▤</span>个人题库</a><a class="nav-item" href="/materials"><span aria-hidden="true">▧</span>简历与项目</a><a class="nav-item selected" href="/planner" aria-current="page"><span aria-hidden="true">◫</span>面试计划</a><a class="nav-item" href="/interview"><span aria-hidden="true">◉</span>模拟面试</a></nav>
-    <section class="journey" aria-labelledby="journey-title"><h2 id="journey-title">你的准备路径</h2><ol>
-      <li><span>01</span><div>整理题库<small>积累自己的问题与答案</small></div></li>
-      <li><span>02</span><div>准备项目<small>保存简历与项目事实</small></div></li>
-      <li class="current"><span>03</span><div>制定计划<small>考察目标与时间预算</small></div></li>
-      <li><span>04</span><div>模拟面试<small>动态提问，逐轮保存</small></div></li>
-    </ol></section>
-    <div class="sidebar-note"><span class="note-mark" aria-hidden="true">✳</span><p>先定方向，<br>再练表达。</p><small>计划只约束目标与节奏，不锁死题目。</small></div>
-    <div class="sidebar-footer"><span class="avatar" aria-hidden="true">我</span><div>个人面试助手<small>大模型应用开发 / AI 全栈</small></div></div>
-  </aside>
+
+    <header class="topbar app-topbar">
+      <a class="app-brand" href="/" aria-label="练习场首页"><img src="/assets/favicon.svg" width="32" height="32" alt=""><span>练习场</span></a>
+      <nav class="app-navigation" aria-label="工作区导航"><a href="/">个人题库</a><a href="/materials">简历与项目</a><a href="/planner" aria-current="page">面试计划</a><a href="/interview">模拟面试</a></nav>
+      <span class="connection" id="connection" role="status">正在读取资料</span>
+    </header>
   <main id="main">
-    <header class="topbar"><span>个人工作区 <span class="slash">/</span> 面试准备</span><span class="connection" id="connection" role="status">正在读取资料</span></header>
     <div class="page">
       <section class="page-heading"><div><div class="eyebrow">PLAN BEFORE YOU PRACTICE</div><h1>面试计划<span class="title-dot">.</span></h1><p>选定资料版本，规划考察目标与题源节奏。</p></div><button class="button primary" id="new-plan" type="button">＋ 新建计划</button></section>
       <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" type="button" aria-label="关闭提示">×</button></div>
@@ -41,6 +35,8 @@
           <section class="welcome" id="planner-welcome"><span class="eyebrow">GOALS, NOT A FIXED SCRIPT</span><h2>先定考察方向</h2><p>选择简历版本、已核对项目与启用题库，<br>生成可调整的考察目标与时间预算。</p><small>点击右上角「新建计划」开始配置；不生成固定问题清单，目标时长只是节奏参考。</small></section>
           <section id="planner-workspace" hidden aria-labelledby="plan-title">
             <div class="editor-heading"><div><div class="eyebrow">PERSONALIZED PLANNER</div><h2 id="plan-title">新建计划</h2></div><span class="save-state" id="plan-status">未生成</span></div>
+            <div class="record-actions" aria-label="计划操作"><span id="plan-mode" class="record-mode">查看计划</span><button id="edit-plan" class="button" type="button">调整配置</button><button id="cancel-plan" class="button" type="button" hidden>取消</button><button form="plan-form" class="button primary" id="generate-plan" type="submit">生成计划 ↗</button><button class="button" id="read-pending" type="button" hidden>读取本次结果</button><button class="text-button danger" id="delete-plan" type="button" hidden>删除计划</button></div>
+            <section id="plan-record-view" class="record-detail" aria-label="计划配置" hidden></section>
             <form id="plan-form" class="material-form planner-form">
               <div class="material-row">
                 <div class="field"><label for="resume-select">简历 <span class="required">*</span></label><select id="resume-select" required></select></div>
@@ -61,7 +57,7 @@
               <p class="material-help">仅发送已核对项目事实与启用题干；不发送简历全文、标准答案或复习笔记。计划不生成固定问题清单，也不改写任何资料。</p>
               <div class="conflict-actions" id="plan-conflict" hidden><p>资料或计划已变化，当前输入已保留。请重新生成计划后再确认。</p><button class="button" id="reload-plan" type="button">读取最新计划</button></div>
               <p id="generate-progress" class="material-help" role="status" hidden></p>
-              <footer class="editor-actions"><button class="text-button danger" id="delete-plan" type="button" hidden>删除计划</button><span class="original-note" id="plan-meta">目标时长仅作节奏参考，到时不强制结束。</span><button class="button" id="read-pending" type="button" hidden>读取本次结果</button><button class="button primary" id="generate-plan" type="submit">生成计划 ↗</button></footer>
+              <footer class="editor-actions"><span class="original-note" id="plan-meta">目标时长仅作节奏参考，到时不强制结束。</span></footer>
             </form>
             <section id="plan-result" class="planner-result" hidden aria-live="polite" aria-labelledby="result-title">
               <div class="project-toolbar"><h3 id="result-title">计划结果</h3><span class="save-state" id="result-state"></span></div>

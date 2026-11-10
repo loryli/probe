@@ -1,3 +1,4 @@
+import { renderRecord } from "./record_view.js?v=20261110-4";
 import { setupAiProjects } from "./ai_projects.js";
 
 const $ = (id) => document.getElementById(id);
@@ -128,6 +129,41 @@ function canLeave(projectOnly = false) {
 }
 
 function updateControls() {
+  $("resume-form").hidden = !state.editing;
+  $("resume-record-view").hidden = state.editing || !state.resume;
+  $("edit-resume").hidden = state.editing || !state.resume;
+  $("cancel-resume").hidden = !state.editing;
+  $("save-resume").hidden = !state.editing;
+  $("resume-mode").textContent = state.editing ? (state.resume ? "编辑简历" : "新建简历") : "查看简历";
+  const hasProject = Boolean(state.project) || state.projectEditing;
+  $("project-record-actions").hidden = !hasProject;
+  $("project-form").hidden = !state.projectEditing;
+  $("project-record-view").hidden = state.projectEditing || !state.project;
+  $("edit-project").hidden = state.projectEditing || !state.project;
+  $("cancel-project").hidden = !state.projectEditing;
+  $("save-project").hidden = !state.projectEditing;
+  $("project-mode").textContent = state.projectEditing ? (state.project ? "编辑项目" : "新建项目") : "查看项目";
+  if (!state.editing && state.resume) {
+    renderRecord($("resume-record-view"), {
+      title: state.resume.name,
+      meta: `简历 v${state.resume.content_version} · ${state.resume.is_active ? "可用于面试" : "已停用"}`,
+      fields: [["来源文件", state.resume.source_file_name || "手工录入"], ["简历文字", state.resume.source_text]],
+    });
+    if (state.resume.document_id) {
+      const download = element("a", "下载原始 PDF ↗", "text-button");
+      download.href = `/materials/documents/${state.resume.document_id}/file`;
+      $("resume-record-view").append(download);
+    }
+  }
+  if (!state.projectEditing && state.project) {
+    const project = state.project;
+    renderRecord($("project-record-view"), {
+      title: project.name,
+      meta: `${project.user_verified ? "已核对" : "待核对"} · 依据简历 v${project.source_version}`,
+      fields: [["职责 / 角色", project.role], ["项目时间", project.duration], ["技术栈", project.tech_stack.join("、")], ["项目说明", project.summary],
+        ...project.facts.flatMap((fact, index) => [[`事实 ${index + 1} · ${fact.fact_type}`, fact.content], ...(fact.evidence_quote ? [["原文依据", fact.evidence_quote]] : [])])],
+    });
+  }
   $("save-state").textContent = state.busy ? "正在处理…" : resumeDirty() ? "简历有未保存修改" : state.resume ? `简历 v${state.resume.content_version}` : "尚未保存";
   $("project-save-state").textContent = projectDirty() ? "有未保存的修改" : state.project ? "已保存" : "尚未保存";
   $("save-resume").disabled = !!state.resume && !resumeDirty();
@@ -155,6 +191,10 @@ async function operate(action) {
     $("main").inert = false;
     $("main").setAttribute("aria-busy", "false");
     updateControls();
+    if (state.focusAfter) {
+      $(state.focusAfter)?.focus();
+      state.focusAfter = null;
+    }
   }
 }
 
@@ -216,10 +256,10 @@ function showTab(tab) {
   }
 }
 
-function fillResume(resume) {
+function fillResume(resume, preserveProject = false) {
   state.formatUndo = null;
   state.resume = resume;
-  state.editing = true;
+  state.editing = resume === null;
   state.documentId = resume?.document_id || null;
   state.fileName = resume?.source_file_name || "";
   state.importedText = resume?.source_text || "";
@@ -234,12 +274,14 @@ function fillResume(resume) {
   $("materials-workspace").hidden = false;
   $("materials-welcome").hidden = true;
   pdfLink("resume-pdf", state.documentId);
-  resetProject();
-  state.projectOffset = state.versionOffset = 0;
-  $("version-detail").hidden = true;
+  if (!preserveProject) {
+    resetProject();
+    state.projectOffset = state.versionOffset = 0;
+    $("version-detail").hidden = true;
+  }
   showTab("resume");
   renderResumes();
-  aiProjects.reset(resume?.id || null);
+  if (!preserveProject) aiProjects.reset(resume?.id || null);
 }
 
 function resetProject() {
@@ -273,6 +315,7 @@ function jsonOptions(method, payload, key) {
 }
 
 async function saveResume() {
+  if (!state.editing) return;
   const payload = resumeValues();
   if (!payload.name.trim() || !payload.source_text.trim()) {
     notify("请填写简历名称和文字；扫描件可先手工粘贴文字。", true);
@@ -284,6 +327,8 @@ async function saveResume() {
     jsonOptions(current ? "PUT" : "POST", payload, current ? null : creationKey("resume", payload)));
   // 保存简历时，保留另一个标签里尚未保存的项目草稿。
   state.resume = result;
+  state.editing = false;
+  state.focusAfter = "edit-resume";
   state.formatUndo = null;
   state.importedText = result.source_text;
   state.fileName = result.source_file_name;
@@ -411,7 +456,7 @@ function addFact(fact = { fact_type: "职责", content: "", evidence_quote: "" }
   const remove = element("button", "移除", "text-button danger");
   remove.type = "button";
   remove.addEventListener("click", () => {
-    if (state.busy) return;
+    if (state.busy || !state.projectEditing) return;
     card.remove();
     $("project-verified").checked = false;
     updateControls();
@@ -444,7 +489,7 @@ function addFact(fact = { fact_type: "职责", content: "", evidence_quote: "" }
 function fillProject(project, source) {
   state.aiCandidate = null;
   state.project = project;
-  state.projectEditing = true;
+  state.projectEditing = project === null;
   state.source = source;
   $("project-form").hidden = false;
   $("project-welcome").hidden = true;
@@ -473,6 +518,7 @@ async function selectProject(id) {
 }
 
 async function saveProject() {
+  if (!state.projectEditing) return;
   const payload = projectValues();
   if (!payload.name.trim() || payload.facts.some((fact) => !fact.content.trim() || !fact.fact_type.trim())) {
     notify("请填写项目名称和每条事实的类型、内容，或移除空白事实。", true);
@@ -491,6 +537,7 @@ async function saveProject() {
   const result = await request(target,
     jsonOptions(project ? "PUT" : "POST", payload, project || candidate ? null : creationKey("project", payload)));
   fillProject(result, state.source);
+  state.focusAfter = "edit-project";
   delete state.creation.project;
   notify("项目与事实已保存。");
   await loadProjects().catch(() => notify("项目已保存，但列表刷新失败，可重新打开项目标签。", true));
@@ -514,6 +561,43 @@ async function loadVersions() {
   }
   pageControls("version", data.total, state.versionOffset);
 }
+
+
+on("edit-resume", "click", () => {
+  if (!state.resume) return;
+  state.editing = true;
+  state.focusAfter = "resume-name";
+});
+on("cancel-resume", "click", () => {
+  if (resumeDirty() && !window.confirm("放弃本次未保存的简历修改？")) return;
+  if (state.resume) {
+    fillResume(state.resume, true);
+    state.focusAfter = "edit-resume";
+  } else {
+    state.editing = false;
+    state.creation = {};
+    resetProject();
+    $("materials-workspace").hidden = true;
+    $("materials-welcome").hidden = false;
+    state.focusAfter = "new-resume";
+  }
+});
+on("edit-project", "click", () => {
+  if (!state.project) return;
+  state.projectEditing = true;
+  state.focusAfter = "project-name";
+});
+on("cancel-project", "click", () => {
+  if (projectDirty() && !window.confirm("放弃本次未保存的项目修改？")) return;
+  delete state.creation.project;
+  if (state.project) {
+    fillProject(state.project, state.source);
+    state.focusAfter = "edit-project";
+  } else {
+    resetProject();
+    state.focusAfter = "new-project";
+  }
+});
 
 on("new-resume", "click", () => { if (canLeave()) { state.creation = {}; fillResume(null); } });
 on("refresh-resumes", "click", loadResumes);

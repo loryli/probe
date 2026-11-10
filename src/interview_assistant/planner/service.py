@@ -911,7 +911,7 @@ class PlannerService:
         except StaleDataError:
             raise conflict() from None
 
-    async def list(self, limit: int, offset: int) -> PlanList:
+    async def list_plans(self, limit: int, offset: int) -> PlanList:
         try:
             async with self.session.begin():
                 conditions = [InterviewPlan.deleted_at.is_(None)]

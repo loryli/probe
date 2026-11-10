@@ -1,5 +1,5 @@
 // Import UI owns its draft selection; the server owns extracted text and source.
-export function setupMarkdownImport({ request, onImported }) {
+export function setupMarkdownImport({ request, onImported, canOpen = () => true }) {
   const $ = (id) => document.getElementById(id);
   const dialog = $("import-dialog");
   const root = "/question-bank/imports";
@@ -157,7 +157,7 @@ export function setupMarkdownImport({ request, onImported }) {
     renderCandidates();
   }
 
-  $("import-markdown").addEventListener("click", () => { dialog.showModal(); updateControls(); });
+  $("import-markdown").addEventListener("click", () => { if (canOpen()) { dialog.showModal(); updateControls(); } });
   for (const id of ["import-close", "import-cancel"]) $(id).addEventListener("click", () => { if (!busy) dialog.close(); });
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
   $("markdown-file").addEventListener("change", invalidate);

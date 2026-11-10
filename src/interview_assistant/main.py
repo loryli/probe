@@ -28,7 +28,7 @@ from interview_assistant.planner.service import PlannerError
 from interview_assistant.question_bank.import_router import import_error_handler
 from interview_assistant.question_bank.import_router import router as import_router
 from interview_assistant.question_bank.imports import ImportProblem
-from interview_assistant.question_bank.router import question_error_handler
+from interview_assistant.question_bank.router import category_router, question_error_handler
 from interview_assistant.question_bank.router import router as question_router
 from interview_assistant.question_bank.service import QuestionBankError
 
@@ -65,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.database = None
     app.include_router(health_router)
     app.include_router(question_router)
+    app.include_router(category_router)
     app.include_router(import_router)
     app.include_router(material_router)
     app.include_router(ai_router)

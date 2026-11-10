@@ -105,7 +105,7 @@ def test_alembic_cli_uses_local_sqlite_without_mysql_configuration(tmp_path, mon
             )
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "0009_interview_report"
+                == "0010_question_categories"
             )
     finally:
         engine.dispose()

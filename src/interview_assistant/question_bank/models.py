@@ -25,6 +25,20 @@ creation_key_type = String(128).with_variant(VARCHAR(128, collation="utf8mb4_bin
 table_options = {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"}
 
 
+class QuestionCategory(Base):
+    __tablename__ = "question_category"
+    __table_args__ = (table_options,)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(60))
+    name_key: Mapped[str] = mapped_column(String(64), unique=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+    __mapper_args__ = {"version_id_col": revision}
+
+
 class Question(Base):
     __tablename__ = "question"
     __table_args__ = (
@@ -35,6 +49,9 @@ class Question(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    category_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("question_category.id", ondelete="RESTRICT"), index=True
+    )
     question_text: Mapped[str] = mapped_column(content_text)
     standard_answer_text: Mapped[str] = mapped_column(content_text)
     user_notes: Mapped[str] = mapped_column(content_text)

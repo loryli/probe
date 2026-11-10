@@ -272,6 +272,7 @@ def test_migration_round_trip_and_model_consistency(bank):
         assert set(inspect(connection).get_table_names()) == {
             "alembic_version",
             "question",
+            "question_category",
             "question_version",
             "question_metadata",
             "markdown_import",

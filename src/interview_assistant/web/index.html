@@ -7,64 +7,61 @@
   <meta name="description" content="个人 AI 面试助手：整理自己的题目、答案与复习笔记。">
   <title>个人题库 · 练习场</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" type="module"></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/theme.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/questions.css?v=20261110-4">
+  <link rel="stylesheet" href="/assets/workspace.css?v=20261110-4">
+  <script src="/assets/app.js?v=20261110-4" type="module"></script>
 </head>
-<body>
+<body class="questions-page">
   <a class="skip-link" href="#main">跳到主内容</a>
-  <aside class="sidebar" aria-label="工作区导航">
-    <a class="brand" href="/" aria-label="练习场首页">
-      <img src="/assets/favicon.svg" width="38" height="38" alt="">
-      <span>练习场<small>INTERVIEW WORKSPACE</small></span>
-    </a>
-    <div class="workspace-label">个人工作区 <span>V1</span></div>
-    <nav><a class="nav-item selected" href="/" aria-current="page"><span aria-hidden="true">▤</span>个人题库<span class="nav-count" id="nav-count">—</span></a><a class="nav-item" href="/materials"><span aria-hidden="true">▧</span>简历与项目</a><a class="nav-item" href="/planner"><span aria-hidden="true">◫</span>面试计划</a><a class="nav-item" href="/interview"><span aria-hidden="true">◉</span>模拟面试</a></nav>
-    <section class="journey" aria-labelledby="journey-title">
-      <h2 id="journey-title">你的准备路径</h2>
-      <ol>
-        <li class="current"><span>01</span><div>整理题库<small>积累自己的问题与答案</small></div></li>
-        <li><span>02</span><div>准备项目<small>保存简历与项目事实</small></div></li>
-        <li><span>03</span><div>制定计划<small>考察目标与时间预算</small></div></li>
-        <li><span>04</span><div>模拟面试<small>动态提问，逐轮保存</small></div></li>
-      </ol>
-    </section>
-    <div class="sidebar-note"><span class="note-mark" aria-hidden="true">✳</span><p>先整理思路，<br>再练习表达。</p><small>从你真正理解的一道题开始。</small></div>
-    <div class="sidebar-footer"><span class="avatar" aria-hidden="true">我</span><div>个人面试助手<small>大模型应用开发 / AI 全栈</small></div></div>
-  </aside>
-
+    <header class="topbar app-topbar">
+      <a class="app-brand" href="/" aria-label="练习场首页"><img src="/assets/favicon.svg" width="32" height="32" alt=""><span>练习场</span></a>
+      <nav class="app-navigation" aria-label="工作区导航"><a href="/" aria-current="page">个人题库<span id="nav-count" class="navigation-count">—</span></a><a href="/materials">简历与项目</a><a href="/planner">面试计划</a><a href="/interview">模拟面试</a></nav>
+      <span id="connection" class="connection" role="status"><i></i>正在连接</span>
+    </header>
   <main id="main">
-    <header class="topbar"><span>个人工作区 <span class="slash">/</span> 面试准备</span><span id="connection" class="connection" role="status"><i></i>正在连接</span></header>
     <div class="page">
       <section class="page-heading">
-        <div><div class="eyebrow">PREPARE WITH PURPOSE</div><h1>个人题库<span class="title-dot">.</span></h1><p>把知识留在这里，把表达练成自己的。</p></div>
+        <div><div class="eyebrow">PREPARE WITH PURPOSE</div><h1>个人题库<span class="title-dot">.</span></h1><p>按主题整理题目，集中复习同一类知识。</p></div>
         <div class="heading-actions"><button class="button" id="import-markdown" type="button">导入 Markdown</button><button class="button primary" id="new-question" type="button"><span aria-hidden="true">＋</span> 新建题目</button></div>
       </section>
       <div class="notice" id="message" role="status" hidden><span id="message-text"></span><button id="dismiss-message" aria-label="关闭提示" type="button">×</button></div>
       <section class="bank" aria-label="题库管理">
+        <aside class="category-column" aria-label="题目分类">
+          <div class="list-heading"><h2>分类</h2><button class="text-button" id="new-category" type="button">＋ 新建</button></div>
+          <nav id="category-list" class="category-list" aria-label="按分类浏览"><p class="drawer-help">正在读取分类…</p></nav>
+          <p class="category-help">一题一个分类。先归类，再集中练习。</p>
+        </aside>
         <div class="question-column">
-          <div class="list-heading"><h2>全部题目 <span id="total-count">—</span></h2><button class="text-button" id="refresh" type="button">刷新</button></div>
+          <div class="list-heading"><h2><span id="category-title">全部题目</span> <span id="total-count">—</span></h2><button class="text-button" id="refresh" type="button">刷新</button></div>
           <form id="search-form" class="search-form" role="search"><label class="sr-only" for="search">搜索题干</label><span aria-hidden="true">⌕</span><input id="search" type="search" maxlength="256" placeholder="搜索题干…" autocomplete="off"><button type="submit" aria-label="搜索">↵</button></form>
           <div class="filter-row"><label for="active-filter">显示</label><select id="active-filter"><option value="">全部状态</option><option value="true">已启用</option><option value="false">已停用</option></select><span>按创建时间排序</span></div>
+          <div class="batch-tools"><label><input id="select-page" type="checkbox"> 本页全选</label><button id="move-questions" class="text-button" type="button" disabled>移动分类 <span id="selection-count">0</span></button></div>
           <div id="question-list" class="question-list" aria-live="polite" aria-busy="true"><p class="list-placeholder">正在读取题库…</p></div>
           <div class="pagination"><button id="previous-page" class="text-button" type="button" disabled>← 上一页</button><span id="page-number">第 1 页</span><button id="next-page" class="text-button" type="button" disabled>下一页 →</button></div>
         </div>
         <div class="editor-column">
           <section id="welcome" class="welcome">
             <div class="empty-art" aria-hidden="true"><div class="paper back"></div><div class="paper front"><span>Q.</span><i></i><i></i><i></i><b>＋</b></div></div>
-            <span class="eyebrow">YOUR KNOWLEDGE, YOUR WORDS</span><h2>从一道题开始</h2><p>写下问题，留下自己的答案。<br>每一次整理，都是下一次面试的底气。</p><small>点击右上角「新建题目」开始；已有题目可在左侧选择继续整理。</small>
+            <span class="eyebrow">YOUR KNOWLEDGE, YOUR WORDS</span><h2>按分类整理，按主题复习</h2><p>先创建自己的知识分类，<br>再把题目放到合适的位置。</p><small>左侧选择分类和题目；勾选题目后，可一次移动多道题。现有题目都可以从「未分类」开始整理。</small>
           </section>
 
           <section id="editor" hidden aria-labelledby="editor-title">
             <div class="editor-heading"><div><div class="eyebrow" id="editor-kicker">QUESTION EDITOR</div><h2 id="editor-title">新建题目</h2></div><span class="save-state" id="save-state">未保存</span></div>
             <div class="editor-tabs" role="tablist" aria-label="题目内容"><button id="content-tab" type="button" role="tab" aria-selected="true" aria-controls="content-panel">题目内容</button><button id="history-tab" type="button" role="tab" aria-selected="false" aria-controls="history-panel" disabled>历史版本 <span id="version-count"></span></button><button id="source-tab" type="button" role="tab" aria-selected="false" aria-controls="source-panel" disabled>来源原文</button></div>
             <div id="content-panel" role="tabpanel" aria-labelledby="content-tab">
+            <div class="record-actions" aria-label="题目操作"><span id="question-mode" class="record-mode">查看题目</span><button id="edit-question" class="button" type="button">编辑</button><button id="cancel-question" class="button" type="button" hidden>取消</button><button form="question-form" class="button primary" id="save-question" type="submit">保存题目 <span aria-hidden="true">↗</span></button><button class="text-button danger" id="delete-question" type="button" hidden>删除题目</button></div>
+            <section id="question-record-view" class="record-detail" aria-label="题目详情"></section>
+            
               <form id="question-form">
+                <div class="field category-field"><label for="question-category">题目分类</label><select id="question-category" name="category_id"><option value="">未分类</option></select><p class="material-help">分类只影响题库整理，不改写题目与答案。</p></div>
                 <div class="field"><label for="question-text">题目 <span class="required">*</span></label><textarea id="question-text" name="question_text" rows="3" placeholder="例如：RAG 中如何提高检索结果的相关性？" required></textarea></div>
                 <div class="field"><label for="answer-text">标准答案 <span class="field-hint">可留空，保留你的原文</span></label><textarea id="answer-text" name="standard_answer_text" rows="9" placeholder="用自己的语言整理答案，支持输入 Markdown 原文…"></textarea></div>
                 <div class="field"><label for="user-notes">复习笔记 <span class="field-hint">仅供自己参考</span></label><textarea id="user-notes" name="user_notes" rows="3" placeholder="容易混淆的概念、补充链接或下次要复习的内容…"></textarea></div>
                 <div class="activation"><div><label for="is-active">用于面试抽题</label><p>启用后可供后续面试使用。</p></div><label class="switch"><input id="is-active" name="is_active" type="checkbox" checked aria-label="用于面试抽题"><span></span></label></div>
                 <div id="conflict-actions" class="conflict-actions" hidden><p>服务器内容已变化。当前输入已保留，可先复制，再读取最新内容。</p><button class="button" id="reload-current" type="button">读取最新内容</button></div>
-                <footer class="editor-actions"><button class="text-button danger" id="delete-question" type="button" hidden>删除题目</button><span class="original-note">原文由你维护，每次内容修改保留历史。</span><button class="button primary" id="save-question" type="submit">保存题目 <span aria-hidden="true">↗</span></button></footer>
+                <footer class="editor-actions"><span class="original-note">原文由你维护，每次内容修改保留历史。</span></footer>
               </form>
             </div>
             <div id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden>
@@ -80,6 +77,23 @@
       <footer class="page-footer"><span>只积累属于你的知识。</span><span>个人题库 <span aria-hidden="true">·</span> 原文与历史可追溯</span></footer>
     </div>
   </main>
+  <dialog id="category-dialog" aria-labelledby="category-dialog-title">
+    <form id="category-form" class="category-dialog-form">
+      <header><h2 id="category-dialog-title">新建分类</h2><button class="text-button" id="close-category-dialog" type="button" aria-label="关闭分类窗口">关闭 ×</button></header>
+      <div class="field"><label for="category-name">分类名称</label><input id="category-name" maxlength="60" required placeholder="例如：Java、数据库、RAG、项目深挖" autocomplete="off"></div>
+      <p id="category-dialog-message" class="dialog-message" role="status" hidden></p>
+      <footer><button class="button primary" id="save-category" type="submit">保存分类</button></footer>
+    </form>
+  </dialog>
+  <dialog id="move-dialog" aria-labelledby="move-dialog-title">
+    <form id="move-form" class="category-dialog-form">
+      <header><h2 id="move-dialog-title">移动题目分类</h2><button class="text-button" id="close-move-dialog" type="button" aria-label="关闭移动窗口">关闭 ×</button></header>
+      <p id="move-description"></p>
+      <div class="field"><label for="move-category">目标分类</label><select id="move-category"><option value="">未分类</option></select></div>
+      <p id="move-dialog-message" class="dialog-message" role="status" hidden></p>
+      <footer><button class="button primary" id="confirm-move" type="submit">确认移动</button></footer>
+    </form>
+  </dialog>
   <dialog id="import-dialog" aria-labelledby="import-title">
     <header class="import-header"><div><div class="eyebrow">BUILD YOUR QUESTION BANK</div><h2 id="import-title">导入 Markdown 题库</h2></div><button class="dialog-close" id="import-close" type="button" aria-label="关闭导入">×</button></header>
     <ol class="import-steps" aria-label="导入步骤"><li id="import-step-file" class="active">01 <span>选择文件</span></li><li id="import-step-preview">02 <span>核对预览</span></li><li id="import-step-confirm">03 <span>确认入库</span></li></ol>

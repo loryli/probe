@@ -26,7 +26,7 @@ async def list_parse_drafts(
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ParseDraftList:
-    return await ResumeParser(session, settings).list(str(resume_id), limit, offset)
+    return await ResumeParser(session, settings).list_drafts(str(resume_id), limit, offset)
 
 
 @router.get("/{draft_id}", response_model=ParseDraftRead, summary="读取提取草稿和逐项目确认状态")

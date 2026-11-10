@@ -1,0 +1,64 @@
+@charset "UTF-8";
+
+/* One outer shell for all four pages; each workspace owns only its contents. */
+:root { --workspace-width: 1440px; --workspace-height: max(520px, calc(100dvh - 300px)); }
+html { scrollbar-gutter: stable; }
+body .page, body.questions-page .page, body.interview-page .page { width: 100%; max-width: var(--workspace-width); padding: 32px 40px 20px; margin: 0 auto; }
+body .page-heading { min-height: 84px; margin: 0 0 24px; align-items: center; }
+body .page-heading h1 { font-size: 30px; }
+body .bank, body.materials-page .bank, body.planner-page .bank { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: var(--workspace-height); min-height: 520px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); overflow: hidden; }
+body.questions-page .bank { grid-template-columns: 200px 300px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: var(--workspace-height); min-height: 520px; }
+body .bank .question-column { display: flex; flex-direction: column; min-height: 0; min-width: 0; max-height: none; overflow: hidden; }
+body .bank .question-list { flex: 1; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; }
+body .bank .editor-column { min-width: 0; min-height: 0; max-height: none; height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+body .bank .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding: 48px 32px; }
+body .bank .welcome p { margin-bottom: 12px; }
+body .bank .pagination { flex: none; }
+body .page-footer { margin-top: 20px; padding-top: 0; }
+body.interview-page.assistance-open main { margin-right: 0; }
+body.interview-page .bank { display: block; height: var(--workspace-height); min-height: 520px; border: 1px solid var(--ui-border); background: var(--ui-surface); padding: 0; overflow: hidden; }
+body.interview-page .bank > .editor-column { padding: 24px 32px; }
+body.interview-page .interview-room, body.interview-page .interview-start { max-width: 960px; margin: 0 auto; padding: 0 0 24px; }
+body.interview-page .workspace-tools { padding-bottom: 16px; }
+body.interview-page .current-question { padding: 28px 0; }
+body.interview-page .question-title, body.interview-page .current-question .turn-text { font-size: clamp(25px, 2.3vw, 32px); }
+body .record-actions { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 70px; padding: 14px 30px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+body .record-mode { flex: 1; color: var(--ui-muted); font-size: 13px; white-space: nowrap; }
+body .record-actions .text-button.danger { margin-left: 6px; padding-left: 16px; border-left: 1px solid var(--ui-border); }
+body .record-detail { padding: 24px 30px 32px; }
+body .record-title { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 22px; line-height: 1.75; font-weight: 550; margin: 0 0 10px; color: var(--ui-text); }
+body .record-meta { color: var(--ui-muted); font-size: 13px; margin: 0 0 26px; }
+body .record-detail > section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--ui-border); }
+body .record-detail h4 { color: var(--ui-secondary); font-size: 13px; font-weight: 500; margin: 0 0 12px; }
+body .record-text { font: 15px/1.95 var(--ui-font); color: var(--ui-text); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; user-select: text; }
+body #panel-projects .record-actions { margin: 24px -30px 0; }
+body #panel-projects .record-detail { padding: 24px 0; }
+body .record-actions + .record-detail[hidden] + form { padding-top: 24px; }
+body .record-actions .button { min-height: 38px; padding: 8px 14px; }
+
+@media (max-width: 1150px) {
+  body .page, body.questions-page .page, body.interview-page .page { padding: 28px 24px 20px; }
+  body .bank, body.materials-page .bank, body.planner-page .bank { grid-template-columns: 260px minmax(0, 1fr); }
+  body.questions-page .bank { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  body.questions-page .category-column { grid-column: 1 / -1; min-height: 0; border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  body.questions-page .category-list { max-height: 140px; }
+  body.questions-page .question-column, body.questions-page .editor-column { min-height: 0; max-height: none; }
+}
+@media (max-width: 760px) {
+  body .page, body.questions-page .page, body.interview-page .page { padding: 24px 16px 20px; }
+  body .page-heading { min-height: 84px; gap: 18px; }
+  body .page-heading h1 { font-size: 27px; }
+  body .bank, body.questions-page .bank, body.materials-page .bank, body.planner-page .bank, body.interview-page .bank { display: flex; flex-direction: column; height: auto; min-height: 520px; }
+  body .bank .question-column { min-height: 280px; max-height: 400px; flex: none; border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  body .bank .question-list { max-height: 260px; }
+  body .bank .editor-column { height: auto; max-height: none; overflow: visible; }
+  body.questions-page .category-column { flex: none; }
+  body.questions-page .category-list { max-height: 140px; }
+  body .bank .welcome { min-height: 380px; padding: 36px 24px; }
+  body.interview-page .bank > .editor-column { padding: 22px 18px; }
+  body .record-actions { padding: 12px 18px; gap: 8px; min-height: 64px; }
+  body .record-detail { padding: 22px 18px 28px; }
+  body .record-title { font-size: 20px; }
+  body #panel-projects .record-actions { margin: 20px -18px 0; }
+  body .record-mode { flex-basis: 100%; }
+}

@@ -102,7 +102,7 @@ class ResumeParser:
         except StaleDataError:
             raise conflict() from None
 
-    async def list(self, resume_id: str, limit: int, offset: int) -> ParseDraftList:
+    async def list_drafts(self, resume_id: str, limit: int, offset: int) -> ParseDraftList:
         try:
             async with self.session.begin():
                 await self.materials.require_resume(resume_id)

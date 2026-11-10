@@ -5,6 +5,8 @@ const state = {
   options: null, sessions: [], total: 0, offset: 0,
   session: null, busy: false, timer: null, waitTimer: null, fetchedAt: 0,
   stream: null, live: false, report: null, reportBusy: false,
+  context: 0, panel: null, returnFocus: null, runtime: null, referencesBusy: false,
+  answerSelection: null,
 };
 
 const statusLabels = { active: "进行中", paused: "已暂停", completed: "已结束" };
@@ -75,6 +77,8 @@ function report(error) {
 
 function setBusy(value) {
   state.busy = value;
+  $("new-session").disabled = value;
+  $("answer-text").disabled = value;
   for (const node of $("interview-room").querySelectorAll("button")) node.disabled = value;
   $("start-session").disabled = value || !selectedPlanUsable();
   if (state.session) renderControls(state.session);
@@ -172,6 +176,8 @@ function showWelcome() {
 }
 
 function showStart() {
+  if (state.busy || !canLeaveDraft()) return;
+  resetSessionView();
   closeStream();
   stopWait();
   state.session = null;
@@ -300,24 +306,26 @@ function renderSessionList() {
 }
 
 async function openSession(id) {
-  if (state.busy) return;
+  if (state.busy || !canLeaveDraft()) return;
   setBusy(true);
   closeStream();
   stopWait();
   try {
     const session = await request(`${base}/${id}`);
+    resetSessionView();
     state.session = session;
     state.fetchedAt = Date.now();
-    state.report = null;
+    const context = state.context;
     $("answer-text").value = "";
     showRoom();
     renderSession(session);
+    $("room-title").focus();
     renderSessionList();
     startTimer();
     // 已结束的场次顺带读一次复盘；没有生成过（404）就保持无报告状态。
     if (session.status === "completed") {
       request(`${base}/${id}/report`).then((report) => {
-        if (state.session && state.session.id === session.id) {
+        if (state.context === context && state.session?.id === session.id) {
           state.report = report;
           renderReportArea(session);
         }
@@ -337,6 +345,7 @@ async function openSession(id) {
 
 async function startSession(event) {
   event.preventDefault();
+  if (state.busy) return;
   const plan = selectedPlan();
   if (!plan || !plan.usable) {
     notify(plan?.reason
@@ -360,10 +369,12 @@ async function startSession(event) {
       }),
       timeoutMs: 180000,
     });
+    resetSessionView();
     state.session = session;
     state.fetchedAt = Date.now();
     showRoom();
     renderSession(session);
+    $("room-title").focus();
     startTimer();
     $("connection").textContent = "已连接";
     await loadSessions();
@@ -411,7 +422,7 @@ async function submitAnswer() {
           stopWait();
         }
         bubble.textNode.textContent += payload.text || "";
-        const box = $("conversation");
+        const box = $("current-question");
         box.scrollTop = box.scrollHeight;
       },
       state(read) {
@@ -500,9 +511,8 @@ function dispatchFrame(frame, handlers) {
 
 // 面试官开口前的占位气泡：逐字追加，结束时被真实轮次替换。
 function beginBubble() {
-  const box = $("conversation");
-  const placeholder = box.querySelector(".list-placeholder");
-  if (placeholder) placeholder.remove();
+  const box = $("current-question");
+  box.replaceChildren();
   const card = element("article", null, "turn question streaming");
   const head = element("div", null, "turn-head");
   head.append(element("span", "面试官正在说"));
@@ -551,6 +561,7 @@ async function control(action, confirmText) {
       body: JSON.stringify({ expected_revision: session.revision }),
       timeoutMs: 180000,
     });
+    if (action === "skip") $("answer-text").value = "";
     state.session = updated;
     state.fetchedAt = Date.now();
     renderSession(updated);
@@ -570,7 +581,8 @@ async function refreshQuietly() {
   try {
     const updated = await request(`${base}/${session.id}`);
     // 回答已被服务端接收时清空草稿，避免重复提交到下一题。
-    if (updated.answer_count > session.answer_count) $("answer-text").value = "";
+    if (updated.answer_count > session.answer_count
+        || updated.current_turn?.id !== session.current_turn?.id) $("answer-text").value = "";
     state.session = updated;
     state.fetchedAt = Date.now();
     renderSession(updated);
@@ -603,10 +615,13 @@ function renderSession(session) {
   if (session.status === "completed") $("answer-text").value = "";
   renderMeta(session);
   renderObjectives(session);
+  renderCurrentQuestion(session);
   renderConversation(session);
+  if (state.panel === "references") renderReferences();
   renderControls(session);
   renderNotice(session);
   renderSummary(session);
+  renderReportArea(session);
 }
 
 function renderMeta(session) {
@@ -626,10 +641,8 @@ function renderMeta(session) {
     span.append(element("small", `${label} `), element("strong", value));
     node.append(span);
   }
-  const elapsed = element("span");
-  elapsed.id = "room-elapsed";
-  elapsed.append(element("small", "用时 "), element("strong", formatSeconds(session.elapsed_sec)));
-  node.append(elapsed);
+  $("room-elapsed").querySelector("strong").textContent = formatSeconds(session.elapsed_sec);
+  $("workspace-progress").textContent = `${covered}/${session.objectives.length} 个目标已覆盖 · 已回答 ${session.answer_count} 轮`;
   const remaining = session.duration_target_sec - session.elapsed_sec;
   node.append(element("span", remaining >= 0
     ? `计划剩余 ${formatSeconds(remaining)}`
@@ -643,6 +656,7 @@ function renderObjectives(session) {
     const chip = element("span", `${objective.id} · ${objective.topic}`, `rail-chip ${objective.status}`);
     chip.title = `${sourceLabels[objective.source]} · ${priorityLabels[objective.priority]}优先级 · `
       + `${objectiveLabels[objective.status]} · 已问 ${objective.asked} · 追问 ${objective.followups}/${objective.max_followups}`;
+    chip.append(element("small", `${objectiveLabels[objective.status]} · 已问 ${objective.asked} · 追问 ${objective.followups}/${objective.max_followups}`));
     rail.append(chip);
   }
 }
@@ -655,6 +669,7 @@ function renderConversation(session) {
   for (const turn of session.turns) {
     if (turn.role === "interviewer") {
       questionIndex += 1;
+      if (turn.id === session.current_turn?.id) continue;
       const card = element("article", null, "turn question");
       const head = element("div", null, "turn-head");
       head.append(element("span", `第 ${questionIndex} 问`));
@@ -683,8 +698,8 @@ function renderConversation(session) {
     }
     box.append(card);
   }
-  if (!session.turns.length) {
-    box.append(element("p", "正在生成第一个问题…", "list-placeholder"));
+  if (!box.children.length) {
+    box.append(element("p", "已提交的问答会显示在这里。", "list-placeholder"));
   }
   box.scrollTop = box.scrollHeight;
 }
@@ -790,7 +805,6 @@ function renderSummary(session) {
   again.type = "button";
   again.addEventListener("click", showStart);
   node.append(again);
-  renderReportArea(session);
 }
 
 const overallLabels = { solid: "整体扎实", mixed: "有亮点有短板", weak: "证据明显不足" };
@@ -882,7 +896,7 @@ function renderReport(node, report, session) {
     node.append(block);
   }
   const footer = element("div", null, "report-footer");
-  const again = element("button", "重新生成复盘 ↗", "text-button");
+  const again = element("button", "读取已保存复盘 ↗", "text-button");
   again.type = "button";
   again.addEventListener("click", generateReport);
   footer.append(
@@ -894,7 +908,8 @@ function renderReport(node, report, session) {
 
 async function generateReport() {
   const session = state.session;
-  if (!session || state.reportBusy) return;
+  if (!session || session.status !== "completed" || state.reportBusy) return;
+  const context = state.context;
   state.reportBusy = true;
   renderReportArea(session);
   try {
@@ -904,12 +919,14 @@ async function generateReport() {
       body: JSON.stringify({ request_id: crypto.randomUUID() }),
       timeoutMs: 180000,
     });
-    state.report = report;
+    if (state.context === context) state.report = report;
   } catch (error) {
-    report_error(error, session);
+    if (state.context === context) report_error(error, session);
   } finally {
-    state.reportBusy = false;
-    renderReportArea(state.session || session);
+    if (state.context === context) {
+      state.reportBusy = false;
+      renderReportArea(state.session);
+    }
   }
 }
 
@@ -922,7 +939,137 @@ function report_error(error, session) {
   if (session) state.report = { status: "failed", error_code: "failed", error_message: error.message || "" };
 }
 
+function canLeaveDraft() {
+  return !$("answer-text").value.trim() || window.confirm("当前回答尚未提交，离开会丢弃这份草稿。继续吗？");
+}
+
+function resetSessionView() {
+  state.context += 1;
+  state.report = null;
+  state.reportBusy = false;
+  state.runtime = null;
+  state.referencesBusy = false;
+  closePanel(false);
+  $("room-report").hidden = true;
+  $("room-report").replaceChildren();
+  $("message").hidden = true;
+}
+
+function openPanel(name, opener) {
+  if (state.panel === name) { closePanel(); return; }
+  if (!state.panel) {
+    state.answerSelection = { start: $("answer-text").selectionStart, end: $("answer-text").selectionEnd };
+  }
+  state.returnFocus = opener;
+  state.panel = name;
+  const titles = { records: "面试记录", objectives: "考察目标", references: "参考答案与笔记", history: "历史问答", details: "场次详情" };
+  $("assistance-title").textContent = titles[name];
+  document.querySelectorAll(".drawer-panel").forEach((node) => { node.hidden = node.id !== `panel-${name}`; });
+  document.querySelectorAll("[data-panel]").forEach((node) => { node.setAttribute("aria-expanded", String(node.dataset.panel === name)); });
+  $("assistance").hidden = false;
+  document.body.classList.add("assistance-open");
+  $("assistance-title").focus();
+  if (name === "references") {
+    renderReferences();
+    if (!state.runtime) loadReferences();
+  }
+}
+
+function closePanel(restoreFocus = true) {
+  $("assistance").hidden = true;
+  document.body.classList.remove("assistance-open");
+  document.querySelectorAll("[data-panel]").forEach((node) => node.setAttribute("aria-expanded", "false"));
+  state.panel = null;
+  if (restoreFocus && !$("answer-box").hidden && !$("interview-room").hidden && !state.busy) {
+    $("answer-text").focus();
+    if (state.answerSelection) $("answer-text").setSelectionRange(state.answerSelection.start, state.answerSelection.end);
+  } else if (restoreFocus && state.returnFocus?.isConnected) {
+    state.returnFocus.focus();
+  }
+  state.answerSelection = null;
+  state.returnFocus = null;
+}
+
+function renderCurrentQuestion(session) {
+  const box = $("current-question");
+  box.replaceChildren();
+  const turn = session.current_turn;
+  if (!turn) {
+    box.append(element("p", session.status === "completed" ? "本场面试已结束，接下来回顾你的回答。" : "正在准备下一步…", "question-waiting"));
+    return;
+  }
+  const index = session.turns.filter((item) => item.role === "interviewer" && item.sequence <= turn.sequence).length;
+  box.append(element("p", `${sourceLabels[turn.source] || "面试问题"} · 第 ${index} 问${turn.is_followup ? " · 追问" : ""}`, "question-kicker"));
+  box.append(element("h3", turn.text, "question-title"));
+  if (turn.objective_id) box.append(element("p", `当前考察：${objectiveText(session, turn.objective_id)}`, "question-context"));
+}
+
+async function loadReferences() {
+  const session = state.session;
+  if (!session || state.referencesBusy) return;
+  const context = state.context;
+  state.referencesBusy = true;
+  $("retry-references").hidden = true;
+  $("reference-content").replaceChildren(element("p", "正在读取本场计划资料…", "drawer-help"));
+  try {
+    const runtime = await request(`/interview-plans/${session.plan_id}/runtime`);
+    if (state.context !== context) return;
+    if (runtime.plan_revision !== session.plan_revision) throw new Error("资料版本与本场面试不一致，暂不展示参考答案。");
+    state.runtime = runtime;
+    renderReferences();
+  } catch (error) {
+    if (state.context !== context) return;
+    $("reference-content").replaceChildren(element("p", error instanceof ApiError ? "无法读取本场计划资料。计划可能已被删除；面试与已保存问答仍可继续使用。" : error.message, "drawer-help"));
+    $("retry-references").hidden = false;
+  } finally {
+    if (state.context === context) state.referencesBusy = false;
+  }
+}
+
+function renderReferences() {
+  const runtime = state.runtime;
+  const session = state.session;
+  if (!runtime || !session) return;
+  const box = $("reference-content");
+  box.replaceChildren();
+  const objectiveId = session.current_turn?.objective_id;
+  const objective = runtime.objectives.find((item) => item.id === objectiveId);
+  if (!objective) {
+    box.append(element("p", "有当前待回答问题时，这里会显示相关的冻结资料。", "drawer-help"));
+    return;
+  }
+  box.append(element("h3", objective.topic));
+  const ids = new Set(objective.question_ids);
+  for (const question of runtime.materials.questions.filter((item) => ids.has(item.id))) {
+    const article = element("article", null, "reference-item");
+    article.append(element("h4", question.question_text), element("small", `题库版本 ${question.content_version}`));
+    article.append(element("h5", "我的参考答案"), element("p", question.standard_answer_text || "未填写参考答案。", "reference-text"));
+    if (question.user_notes) article.append(element("h5", "我的笔记"), element("p", question.user_notes, "reference-text"));
+    box.append(article);
+  }
+  const factIds = new Set(objective.project_fact_ids);
+  for (const project of runtime.materials.projects) {
+    for (const fact of project.facts.filter((item) => factIds.has(item.id))) {
+      const article = element("article", null, "reference-item");
+      article.append(element("h4", project.name), element("p", fact.content, "reference-text"));
+      box.append(article);
+    }
+  }
+  if (box.children.length === 1) box.append(element("p", "当前目标没有可展示的参考资料。", "drawer-help"));
+}
+
 function bind() {
+  document.querySelectorAll("[data-panel]").forEach((button) => {
+    button.addEventListener("click", () => openPanel(button.dataset.panel, button));
+  });
+  $("close-assistance").addEventListener("click", () => closePanel());
+  $("retry-references").addEventListener("click", loadReferences);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.panel) { event.preventDefault(); closePanel(); }
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if ($("answer-text").value.trim()) { event.preventDefault(); event.returnValue = ""; }
+  });
   $("new-session").addEventListener("click", showStart);
   $("refresh-sessions").addEventListener("click", () => {
     loadSessions().then(() => notify("记录已刷新。")).catch(report);
@@ -948,10 +1095,10 @@ function bind() {
   $("pause-session").addEventListener("click", () => control("pause"));
   $("resume-session").addEventListener("click", () => control("resume"));
   $("skip-objective").addEventListener("click", () => control(
-    "skip", "跳过当前目标？已提交的回答会保留，之后不再追问这个目标。",
+    "skip", "跳过当前目标？未提交的草稿会清空，已提交的回答保留，之后不再追问这个目标。",
   ));
   $("end-session").addEventListener("click", () => control(
-    "end", "结束这场面试？已保存的问答与目标进度都会保留。",
+    "end", "结束这场面试？未提交的草稿不会保存，已保存的问答与目标进度都会保留。",
   ));
 }
 

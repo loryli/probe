@@ -75,7 +75,7 @@ async def list_plans(
     limit: Limit = 10,
     offset: Offset = 0,
 ) -> PlanList:
-    return await PlannerService(session, settings).list(limit, offset)
+    return await PlannerService(session, settings).list_plans(limit, offset)
 
 
 @router.get("/{plan_id}", response_model=PlanRead, summary="读取计划、资料快照与确认状态")

@@ -6,6 +6,11 @@ from fastapi.responses import JSONResponse
 
 from interview_assistant.api.dependencies import SessionDependency
 from interview_assistant.question_bank.schemas import (
+    CategoryAssignment,
+    CategoryCreate,
+    CategoryList,
+    CategoryRead,
+    CategoryRename,
     QuestionCreate,
     QuestionHistory,
     QuestionList,
@@ -14,6 +19,8 @@ from interview_assistant.question_bank.schemas import (
     QuestionVersionRead,
 )
 from interview_assistant.question_bank.service import (
+    CategoryProblem,
+    CategoryService,
     CreationKeyConflict,
     QuestionNotFound,
     QuestionService,
@@ -33,7 +40,9 @@ Offset = Annotated[int, Query(ge=0)]
 
 
 async def question_error_handler(request: Request, error: Exception) -> JSONResponse:
-    if isinstance(error, QuestionNotFound):
+    if isinstance(error, CategoryProblem):
+        code, message, http_status = error.code, error.message, error.status
+    elif isinstance(error, QuestionNotFound):
         code, message, http_status = "question_not_found", "题目或内容版本不存在", 404
     elif isinstance(error, CreationKeyConflict):
         code, message, http_status = (
@@ -75,12 +84,16 @@ async def create_question(
 async def list_questions(
     session: SessionDependency,
     is_active: bool | None = None,
+    category_id: UUID | None = None,
+    uncategorized: bool = False,
     search: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> QuestionList:
-    return await QuestionService(session).list(
-        is_active=is_active, search=search, limit=limit, offset=offset
+    return await QuestionService(session).list_questions(
+        is_active=is_active, search=search, limit=limit, offset=offset,
+        category_id=str(category_id) if category_id is not None else None,
+        uncategorized=uncategorized,
     )
 
 
@@ -124,3 +137,35 @@ async def get_version(
     session: SessionDependency,
 ) -> QuestionVersionRead:
     return await QuestionService(session).version(str(question_id), version)
+
+
+category_router = APIRouter(prefix="/question-bank/categories", tags=["question-bank"])
+
+
+@category_router.get("", response_model=CategoryList, summary="分类与未删除题目的数量")
+async def list_categories(session: SessionDependency) -> CategoryList:
+    return await CategoryService(session).list_categories()
+
+
+@category_router.post("", response_model=CategoryRead, status_code=201, summary="创建个人分类")
+async def create_category(
+    payload: CategoryCreate, response: Response, session: SessionDependency,
+) -> CategoryRead:
+    category, created = await CategoryService(session).create(payload)
+    if not created:
+        response.status_code = 200
+    return category
+
+
+@category_router.patch("/{category_id}", response_model=CategoryRead, summary="重命名个人分类")
+async def rename_category(
+    category_id: UUID, payload: CategoryRename, session: SessionDependency,
+) -> CategoryRead:
+    return await CategoryService(session).rename(str(category_id), payload)
+
+
+@router.post("/classify", response_model=list[QuestionRead], summary="原子批量移动题目分类，不修改原文版本")
+async def classify_questions(
+    payload: CategoryAssignment, session: SessionDependency,
+) -> list[QuestionRead]:
+    return await CategoryService(session).assign(payload)

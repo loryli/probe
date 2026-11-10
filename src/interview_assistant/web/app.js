@@ -1,3 +1,4 @@
+import { renderRecord } from "./record_view.js?v=20261110-4";
 import { setupMarkdownImport } from "./imports.js";
 
 const $ = (id) => document.getElementById(id);
@@ -10,8 +11,10 @@ const inputs = {
   user_notes: $("user-notes"),
 };
 const state = {
-  selected: null, isNew: false, busy: false, offset: 0, total: 0,
+  selected: null, isNew: false, editing: false, busy: false, offset: 0, total: 0,
   search: "", filter: "", items: [], listRequest: 0, listLoading: false, listError: false,
+  category: "", categories: [], categoryCounts: null, checked: new Set(),
+  categoryRequest: 0, categoryEditing: null, categoryCreation: null, categoryBusy: false, moveBusy: false,
   historyOffset: 0, historyRequest: 0, tab: "content", creation: null,
 };
 const dateFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -76,19 +79,20 @@ function values() {
     standard_answer_text: inputs.standard_answer_text.value,
     user_notes: inputs.user_notes.value,
     is_active: $("is-active").checked,
+    category_id: $("question-category").value || null,
   };
 }
 
 function changes() {
   const current = values();
-  const previous = state.selected || { question_text: "", standard_answer_text: "", user_notes: "", is_active: true };
+  const previous = state.selected || { question_text: "", standard_answer_text: "", user_notes: "", is_active: true, category_id: null };
   return Object.fromEntries(Object.entries(current).filter(([key, value]) => (
-    key === "is_active" ? value !== previous[key] : value !== normalized(previous[key])
+    textFields.includes(key) ? value !== normalized(previous[key]) : value !== (previous[key] ?? null)
   )));
 }
 
 function isDirty() {
-  return (state.isNew || state.selected !== null) && Object.keys(changes()).length > 0;
+  return state.editing && (state.isNew || state.selected !== null) && Object.keys(changes()).length > 0;
 }
 
 function canLeave() {
@@ -96,6 +100,20 @@ function canLeave() {
 }
 
 function updateSaveState() {
+  $("question-form").hidden = !state.editing;
+  $("question-record-view").hidden = state.editing || !state.selected;
+  $("edit-question").hidden = state.editing || !state.selected;
+  $("cancel-question").hidden = !state.editing;
+  $("save-question").hidden = !state.editing;
+  $("question-mode").textContent = state.editing ? (state.isNew ? "新建题目" : "编辑题目") : "查看题目";
+  if (!state.editing && state.selected) {
+    const category = state.categories.find((item) => item.id === state.selected.category_id);
+    renderRecord($("question-record-view"), {
+      title: state.selected.question_text,
+      meta: `${category?.name || "未分类"} · ${state.selected.is_active ? "已启用" : "已停用"} · 原文 v${state.selected.content_version}`,
+      fields: [["标准答案", state.selected.standard_answer_text], ["复习笔记", state.selected.user_notes]],
+    });
+  }
   $("save-state").textContent = state.busy ? "正在处理…" : isDirty() ? "有未保存的修改" : state.isNew ? "尚未保存" : "已保存";
   $("save-question").disabled = state.busy || (!state.isNew && !isDirty());
 }
@@ -103,13 +121,14 @@ function updateSaveState() {
 function setBusy(busy) {
   state.busy = busy;
   for (const input of Object.values(inputs)) input.disabled = busy;
-  for (const id of ["is-active", "new-question", "import-markdown", "delete-question", "reload-current", "search", "active-filter", "refresh"]) {
+  for (const id of ["edit-question", "cancel-question", "is-active", "question-category", "new-category", "new-question", "import-markdown", "delete-question", "reload-current", "search", "active-filter", "refresh"]) {
     $(id).disabled = busy;
   }
   $("history-tab").disabled = busy || state.isNew || !state.selected;
   $("source-tab").disabled = busy || state.selected?.source !== "markdown";
   $("content-tab").disabled = busy;
   renderList();
+  renderCategories();
   updateSaveState();
 }
 
@@ -127,21 +146,35 @@ function renderList() {
   if (state.listError) {
     list.append(text("p", "读取失败，点击上方「刷新」重试。", "list-placeholder"));
   } else if (!state.items.length) {
-    list.append(text("p", state.listLoading ? "正在读取题库…" : state.search || state.filter ? "没有找到符合条件的题目，试试其他筛选条件。" : "这里还没有题目。\n点击「新建题目」开始整理。", "list-placeholder"));
+    list.append(text("p", state.listLoading ? "正在读取题库…" : state.search || state.filter || state.category ? "没有找到符合条件的题目，试试其他筛选条件。" : "这里还没有题目。\n点击「新建题目」开始整理。", "list-placeholder"));
   }
   for (const item of state.listError ? [] : state.items) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `question-card${state.selected?.id === item.id ? " selected" : ""}`;
     button.setAttribute("aria-pressed", String(state.selected?.id === item.id));
-    button.disabled = state.busy;
+    button.disabled = state.busy || state.listLoading;
     const meta = text("div", "", "card-meta");
     meta.append(text("span", item.is_active ? "已启用" : "已停用", `status-label${item.is_active ? "" : " inactive"}`));
     meta.append(text("span", `原文 v${item.content_version}`));
     button.append(meta, text("h3", item.question_text, "card-title"), text("p", item.standard_answer_text || "还没有标准答案", "card-snippet"));
     button.addEventListener("click", () => selectQuestion(item.id).catch(report));
-    list.append(button);
+    const row = text("div", "", "question-row");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.checked.has(item.id);
+    checkbox.disabled = state.busy || state.listLoading;
+    checkbox.setAttribute("aria-label", `选择题目：${item.question_text.slice(0, 60)}`);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.checked.add(item.id); else state.checked.delete(item.id);
+      renderBatchControls();
+    });
+    const categoryName = state.categories.find((category) => category.id === item.category_id)?.name;
+    button.append(text("span", categoryName || "未分类", "question-category-label"));
+    row.append(checkbox, button);
+    list.append(row);
   }
+  renderBatchControls();
   $("page-number").textContent = `第 ${Math.floor(state.offset / pageSize) + 1} / ${Math.max(1, Math.ceil(state.total / pageSize))} 页`;
   $("previous-page").disabled = state.busy || state.listLoading || state.listError || state.offset === 0;
   $("next-page").disabled = state.busy || state.listLoading || state.listError || state.offset + pageSize >= state.total;
@@ -150,11 +183,14 @@ function renderList() {
 async function loadList() {
   const sequence = ++state.listRequest;
   state.listLoading = true;
+  state.checked.clear();
   state.listError = false;
   renderList();
   const params = new URLSearchParams({ limit: String(pageSize), offset: String(state.offset) });
   if (state.search) params.set("search", state.search);
   if (state.filter) params.set("is_active", state.filter);
+  if (state.category === "uncategorized") params.set("uncategorized", "true");
+  else if (state.category) params.set("category_id", state.category);
   try {
     const data = await request(`${base}?${params}`);
     if (sequence !== state.listRequest) return false;
@@ -165,9 +201,8 @@ async function loadList() {
     state.total = data.total;
     state.items = data.items;
     $("total-count").textContent = `${data.total}`;
-    // The navigation count follows the current filter, rather than implying an
-    // independently loaded global total.
-    $("nav-count").textContent = state.search || state.filter ? "·" : `${data.total}`;
+    // Category counts describe the whole bank; the list count follows filters.
+    $("nav-count").textContent = state.categoryCounts?.total_questions ?? data.total;
     return true;
   } catch (error) {
     if (sequence === state.listRequest) {
@@ -197,12 +232,15 @@ function showContent() {
 function populate(question) {
   state.selected = question;
   state.isNew = question === null;
+  state.editing = question === null;
   state.creation = null;
   ++state.historyRequest;
   for (const name of textFields) inputs[name].value = question?.[name] || "";
   $("is-active").checked = question?.is_active ?? true;
+  categoryOptions($("question-category"), question ? question.category_id || "" : actualCategory());
   $("welcome").hidden = true;
   $("editor").hidden = false;
+  document.querySelector(".editor-column").scrollTop = 0;
   $("editor-title").textContent = question ? "整理题目" : "新建题目";
   $("editor-kicker").textContent = question ? `QUESTION · ${question.id.slice(0, 8).toUpperCase()}` : "A NEW START";
   $("delete-question").hidden = !question;
@@ -236,7 +274,7 @@ async function selectQuestion(id) {
 
 async function saveQuestion(event) {
   event.preventDefault();
-  if (state.busy) return;
+  if (state.busy || !state.editing) return;
   if (!inputs.question_text.value.trim()) {
     notify("请填写题目，题目不能只包含空白字符。", true);
     inputs.question_text.focus();
@@ -255,12 +293,14 @@ async function saveQuestion(event) {
     });
     populate(saved);
     if (creating) {
+      state.category = saved.category_id || "uncategorized";
       state.offset = 0;
       state.search = "";
       state.filter = "";
       $("search").value = "";
       $("active-filter").value = "";
     }
+    await loadCategories();
     const refreshed = await loadList();
     if (refreshed) notify(creating ? "题目已创建，原文已保存。" : "修改已保存。内容变化可在「历史版本」查看。");
   } finally { setBusy(false); }
@@ -277,6 +317,7 @@ async function deleteQuestion() {
     ++state.historyRequest;
     $("editor").hidden = true;
     $("welcome").hidden = false;
+    await loadCategories();
     if (await loadList()) notify("题目已删除，历史记录已保留。");
   } finally { setBusy(false); }
 }
@@ -376,12 +417,210 @@ async function checkConnection() {
   }
 }
 
+function actualCategory() {
+  return state.category && state.category !== "uncategorized" ? state.category : "";
+}
+
+function categoryOptions(select, value) {
+  select.replaceChildren();
+  const none = text("option", "未分类");
+  none.value = "";
+  select.append(none);
+  for (const category of state.categories) {
+    const option = text("option", category.name);
+    option.value = category.id;
+    select.append(option);
+  }
+  // Refreshing classifications must not silently change an editor draft.
+  if (value && !state.categories.some((category) => category.id === value)) {
+    const missing = text("option", "原分类（请刷新分类列表）");
+    missing.value = value;
+    select.append(missing);
+  }
+  select.value = value;
+}
+
+async function loadCategories() {
+  const sequence = ++state.categoryRequest;
+  try {
+    const data = await request("/question-bank/categories");
+    if (sequence !== state.categoryRequest) return;
+    state.categories = data.items;
+    state.categoryCounts = data;
+    categoryOptions($("question-category"), $("question-category").value);
+    $("nav-count").textContent = data.total_questions;
+    renderCategories();
+    renderList();
+    updateSaveState();
+  } catch (error) {
+    if (sequence === state.categoryRequest) {
+      $("category-list").replaceChildren(text("p", "分类读取失败，请点击题目列表上方的「刷新」重试。", "category-help"));
+    }
+    throw error;
+  }
+}
+
+function renderCategories() {
+  if (!state.categoryCounts) return;
+  const list = $("category-list");
+  list.replaceChildren();
+  const choices = [
+    { id: "", name: "全部题目", question_count: state.categoryCounts.total_questions },
+    { id: "uncategorized", name: "未分类", question_count: state.categoryCounts.uncategorized_count },
+    ...state.categories,
+  ];
+  for (const category of choices) {
+    const row = text("div", "", "category-row");
+    const button = text("button", "", "category-button");
+    button.type = "button";
+    button.disabled = state.busy;
+    button.setAttribute("aria-pressed", String(state.category === category.id));
+    button.append(text("span", category.name), text("span", String(category.question_count), "category-count"));
+    button.addEventListener("click", () => switchCategory(category.id).catch(report));
+    row.append(button);
+    if (category.id && category.id !== "uncategorized") {
+      const rename = text("button", "编辑", "text-button category-rename");
+      rename.type = "button";
+      rename.disabled = state.busy;
+      rename.setAttribute("aria-label", `重命名分类：${category.name}`);
+      rename.addEventListener("click", () => openCategoryDialog(category));
+      row.append(rename);
+    }
+    list.append(row);
+  }
+  $("category-title").textContent = choices.find((category) => category.id === state.category)?.name || "全部题目";
+}
+
+function clearEditor() {
+  state.editing = false;
+  state.selected = null;
+  state.isNew = false;
+  state.creation = null;
+  ++state.historyRequest;
+  $("editor").hidden = true;
+  $("welcome").hidden = false;
+  $("conflict-actions").hidden = true;
+  updateSaveState();
+}
+
+async function switchCategory(id) {
+  if (state.category === id || !canLeave()) return;
+  state.category = id;
+  state.offset = 0;
+  state.checked.clear();
+  clearEditor();
+  renderCategories();
+  await loadList();
+}
+
+function renderBatchControls() {
+  $("selection-count").textContent = String(state.checked.size);
+  $("move-questions").disabled = state.busy || state.listLoading || !state.checked.size;
+  $("select-page").disabled = state.busy || state.listLoading || state.listError || !state.items.length;
+  $("select-page").checked = state.items.length > 0 && state.items.every((item) => state.checked.has(item.id));
+  $("select-page").indeterminate = state.checked.size > 0 && !$("select-page").checked;
+}
+
+function openCategoryDialog(category = null) {
+  if (state.busy) return;
+  state.categoryEditing = category;
+  state.categoryCreation = null;
+  $("category-dialog-title").textContent = category ? "重命名分类" : "新建分类";
+  $("category-name").value = category?.name || "";
+  $("category-dialog-message").hidden = true;
+  $("category-dialog").showModal();
+  $("category-name").focus();
+}
+
+function dialogMessage(id, error) {
+  $(id).textContent = error instanceof ApiError ? error.message : "操作未完成，请重试。";
+  $(id).hidden = false;
+}
+
+on("new-category", "click", () => openCategoryDialog());
+on("close-category-dialog", "click", () => { if (!state.categoryBusy) $("category-dialog").close(); });
+$("category-dialog").addEventListener("cancel", (event) => { if (state.categoryBusy) event.preventDefault(); });
+on("category-form", "submit", async (event) => {
+  event.preventDefault();
+  if (state.categoryBusy) return;
+  const name = $("category-name").value.trim();
+  if (!name) { $("category-name").focus(); return; }
+  const editing = state.categoryEditing;
+  if (!editing && state.categoryCreation?.name !== name) state.categoryCreation = { name, id: crypto.randomUUID() };
+  state.categoryBusy = true;
+  for (const id of ["category-name", "save-category", "close-category-dialog"]) $(id).disabled = true;
+  try {
+    await request(`/question-bank/categories${editing ? `/${editing.id}` : ""}`, {
+      method: editing ? "PATCH" : "POST",
+      body: JSON.stringify(editing ? { name, expected_revision: editing.revision } : { name, request_id: state.categoryCreation.id }),
+    });
+    $("category-dialog").close();
+    await loadCategories();
+    notify(editing ? "分类名称已更新。" : "分类已创建，可以勾选题目移动到这里。");
+  } catch (error) {
+    dialogMessage("category-dialog-message", error);
+    if (!$("category-dialog").open) report(error);
+  } finally {
+    state.categoryBusy = false;
+    for (const id of ["category-name", "save-category", "close-category-dialog"]) $(id).disabled = false;
+  }
+});
+on("select-page", "change", () => {
+  state.checked = $("select-page").checked ? new Set(state.items.map((item) => item.id)) : new Set();
+  renderList();
+});
+on("move-questions", "click", () => {
+  if (!state.checked.size || !canLeave()) return;
+  categoryOptions($("move-category"), actualCategory());
+  $("move-description").textContent = `将选中的 ${state.checked.size} 道题目放入同一个分类，题目、答案和笔记保持原文。`;
+  $("move-dialog-message").hidden = true;
+  $("move-dialog").showModal();
+  $("move-category").focus();
+});
+on("close-move-dialog", "click", () => { if (!state.moveBusy) $("move-dialog").close(); });
+$("move-dialog").addEventListener("cancel", (event) => { if (state.moveBusy) event.preventDefault(); });
+on("move-form", "submit", async (event) => {
+  event.preventDefault();
+  if (state.moveBusy || state.busy) return;
+  const questions = state.items.filter((item) => state.checked.has(item.id)).map((item) => ({ id: item.id, expected_revision: item.revision }));
+  if (!questions.length) return;
+  state.moveBusy = true;
+  for (const id of ["move-category", "confirm-move", "close-move-dialog"]) $(id).disabled = true;
+  setBusy(true);
+  try {
+    await request(`${base}/classify`, { method: "POST", body: JSON.stringify({ category_id: $("move-category").value || null, questions }) });
+    $("move-dialog").close();
+    clearEditor();
+    await loadCategories();
+    await loadList();
+    notify(`已移动 ${questions.length} 道题目。`);
+  } catch (error) {
+    dialogMessage("move-dialog-message", error);
+    if (!$("move-dialog").open) report(error);
+  } finally {
+    state.moveBusy = false;
+    for (const id of ["move-category", "confirm-move", "close-move-dialog"]) $(id).disabled = false;
+    setBusy(false);
+  }
+});
+
+on("edit-question", "click", () => {
+  if (!state.selected || state.busy) return;
+  state.editing = true;
+  updateSaveState();
+  inputs.question_text.focus();
+});
+on("cancel-question", "click", () => {
+  if (state.busy || (isDirty() && !window.confirm("放弃本次未保存的题目修改？"))) return;
+  if (state.selected) { populate(state.selected); $("edit-question").focus(); }
+  else { clearEditor(); renderList(); $("new-question").focus(); }
+});
 on("new-question", "click", newQuestion);
 on("question-form", "submit", saveQuestion);
 on("delete-question", "click", deleteQuestion);
 on("reload-current", "click", () => state.selected && selectQuestion(state.selected.id));
 on("dismiss-message", "click", () => { $("message").hidden = true; });
-on("refresh", "click", () => Promise.all([loadList(), checkConnection()]));
+on("refresh", "click", () => Promise.all([loadList(), loadCategories(), checkConnection()]));
 on("content-tab", "click", showContent);
 on("history-tab", "click", openHistory);
 on("source-tab", "click", openSource);
@@ -414,10 +653,14 @@ window.addEventListener("beforeunload", (event) => {
 
 setupMarkdownImport({
   request,
+  canOpen: canLeave,
   onImported: async (result) => {
     state.offset = 0;
     state.search = "";
     state.filter = "";
+    state.category = "uncategorized";
+    clearEditor();
+    await loadCategories();
     $("search").value = "";
     $("active-filter").value = "";
     await loadList();
@@ -426,4 +669,4 @@ setupMarkdownImport({
   },
 });
 
-await Promise.all([loadList(), checkConnection()]);
+await Promise.all([loadList(), loadCategories().catch(report), checkConnection()]);
