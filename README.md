@@ -26,7 +26,7 @@ python -m venv .venv
 
 macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启动服务可安装 `-c constraints.txt -e .`，无需开发依赖。`pyproject.toml` 声明依赖范围，`constraints.txt` 记录当前验证过的版本；变更依赖时同步更新并重新验证。
 
-新版前端位于 `frontend/`。开发需要 Node.js 20.19+ 或 22.12+：在一个终端启动 FastAPI，在另一个终端执行 `cd frontend; npm install; npm run dev`，访问 <http://127.0.0.1:5173/>。Vite 将现有 API 路径代理到 `127.0.0.1:8000`。构建执行 `cd frontend; npm run build`，产物写入 `frontend/dist/`，之后 FastAPI 的 `/app/` 会托管完整构建版。开发服务器入口是 `/`；`/frontend-assets/` 是生产构建的静态资源前缀，不是开发页面入口。
+新版前端位于 `frontend/`。开发需要 Node.js 20.19+ 或 22.12+：在一个终端启动 FastAPI，在另一个终端执行 `cd frontend; npm ci; npm run dev`，访问 <http://127.0.0.1:5173/>。Vite 将现有 API 路径代理到 `127.0.0.1:8000`。构建执行 `cd frontend; npm run build`，产物写入 `frontend/dist/`，之后 FastAPI 的 `/app/` 会托管完整构建版。开发服务器入口是 `/`；`/frontend-assets/` 是生产构建的静态资源前缀，不是开发页面入口。
 
 默认本地模式无需填写数据库账号或创建数据库。首次启动会自动在 `data/interview.sqlite3` 创建独立的 SQLite 开发库，并通过 Alembic 准备表结构；题目和历史版本在重启后保留。`.env` 是可选配置，现有文件中的 `INTERVIEW_DATABASE_URL` 留空即可使用此模式。
 
@@ -36,8 +36,8 @@ macOS/Linux 使用 `.venv/bin/python` 替代 `.venv\Scripts\python.exe`。仅启
 - 简历与项目：<http://127.0.0.1:8000/materials>，维护简历版本、项目事实并核对 AI 候选。
 - 面试计划：<http://127.0.0.1:8000/planner>，选择固定资料版本并生成、确认目标与预算。
 - 文字模拟面试：<http://127.0.0.1:8000/interview>，按已确认计划练习并回看问答与复盘。
-- Vue 应用入口：<http://127.0.0.1:8000/app/>。前端构建产物存在时提供四个新版工作区；构建前这些根路径仍由旧页面提供。
-- 前端选型、后端契约调查与新版体验方案见 [前端选型与体验方案](docs/design/FRONTEND_SELECTION_AND_UX.md)，当前实现与验收状态见 [重设计路线](docs/design/REDESIGN_ROADMAP.md)。此前的设计系统展示与页面 UX 文档属于未获认可的旧方案，不作为新实现依据。
+- Vue 应用入口：<http://127.0.0.1:8000/app/>。前端构建产物存在时提供四个新版工作区；未构建时返回明确的 503 启动提示；旧页面不再保留。构建后需重启后端以挂载资源。
+- 前端选型、目录职责、统一视觉与运行方式见 [前端开发方案](docs/frontend/README.md)，业务保护规则见 [前端业务规则](docs/frontend/BUSINESS_RULES.md)。
 
 四个页面的新建操作统一由页面右上角主按钮触发；空状态区域只保留引导文案，不重复放置按钮。
 - Apifox 导入地址：<http://127.0.0.1:8000/openapi.json>，操作见下方「使用 Apifox 调试」。
@@ -310,14 +310,18 @@ src/interview_assistant/
   materials/          PDF/OCR、简历版本、项目事实、AI 提取草稿与人工确认 API
   planner/            面试计划模型、结构化输出契约、生成与确认服务及 API
   interview/          文字面试场次与轮次模型、决策契约、运行时服务及 API
-  web/                迁移期间保留的原生页面回退入口
-frontend/             Vue 3 + TypeScript + Vite 前端；开发代理 API，生产构建同源托管
+frontend/             唯一前端工程；Vue 3 + TypeScript + Vite
+  src/views/          四个业务页面
+  src/api/            JSON 请求与面试 SSE 传输
+  src/composables/    面试会话状态
+  src/styles/         全局、共用工作区和页面样式
+docs/frontend/        当前前端方案与业务保护规则
 migrations/           Alembic 迁移环境和版本脚本
 data/                 本地 SQLite 数据，已忽略版本控制
 tests/                使用临时文件数据库的离线检查
 ```
 
-后续逐步推进题库元数据、逐轮后台分析与记忆候选等能力，并同步完善页面。四个现有业务工作区已接入 Vue 前端；原生 `web/` 资源暂作未构建时的兼容入口，待新版体验验收后再清理。语音模拟面试仍需单独完成产品与后端协议设计，本前端没有语音功能入口。
+后续逐步推进题库元数据、逐轮后台分析与记忆候选等能力，并同步完善页面。四个现有业务工作区已接入 Vue 前端；旧原生页面和旧视觉方案已删除，后续维护以 `frontend/` 和 `docs/frontend/` 为准。语音模拟面试仍需单独完成产品与后端协议设计，本前端没有语音功能入口。
 
 ## 题库 API
 
@@ -371,7 +375,7 @@ Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-测试覆盖基础设施、页面与静态资源路由、SQLite 启动初始化、原文保真、重启后持久化、编辑冲突、Markdown 拆分与来源、选择导入、并发确认、失败回滚、元数据隔离和迁移升降级。使用临时 SQLite 文件运行实际迁移与接口，并阻止 MySQL 驱动连接；另检查 MySQL SQL 生成与旧版数据升级。测试不调用 Qwen，MySQL 联调仍需在独立开发数据库中进行。CI 配置不代表已在远端运行。页面交互需另用浏览器验证，Python 测试不代替浏览器检查。
+现有测试代码覆盖基础设施、页面入口重定向与退役资源路由、SQLite 启动初始化、原文保真、重启后持久化、编辑冲突、Markdown 拆分与来源、选择导入、并发确认、失败回滚、元数据隔离和迁移升降级。使用临时 SQLite 文件运行实际迁移与接口，并阻止 MySQL 驱动连接；另检查 MySQL SQL 生成与旧版数据升级。测试不调用 Qwen，MySQL 联调仍需在独立开发数据库中进行。CI 配置不代表已在远端运行。页面交互需另用浏览器验证，Python 测试不代替浏览器检查。
 
 ## 后续讨论已确认的补充
 
@@ -385,10 +389,10 @@ Markdown 接口同样可通过 `/openapi.json` 导入 Apifox：
 
 Markdown 首版切分与预览行为见上文；更复杂的笔记格式后续按实际文件补充。设计稿中“时长是硬边界”“时间到结束”的旧表述后续需按上述确认同步。
 
-## 前端迁移交付说明
+## 目录整理说明
 
-`frontend/` 当前提供四个接入真实后端 API 的 Vue 工作区：题库（检索、分类、原文编辑、版本历史、Markdown 预览导入）、资料（PDF/OCR 草稿、简历版本、项目事实、AI 候选人工核对）、计划（固定资料版本、材料范围、目标与预算、确认和调整）、文字面试（SSE 出题、回答保存、状态恢复、控制与复盘）。计划页的「按此计划开始练习」会把已确认计划带入面试页。语音模拟面试尚未实现。
+前端唯一实现位于 `frontend/`。旧原生 HTML/CSS/JavaScript、设计系统展示页及过时视觉方案已删除；历史版本可通过 Git 查看。当前前端文档集中在 `docs/frontend/`，核心产品与后端设计继续放在 `docs/`。
 
-改动涉及 `frontend/`、FastAPI 的静态构建托管入口和本文档；没有修改业务 API、数据模型或服务规则。原生 `src/interview_assistant/web/` 仍是尚未构建新版时的兼容入口。按项目约定，本次没有运行依赖安装、构建、测试、静态检查或浏览器验证；页面需由用户启动服务后体验。
+FastAPI 的旧页面地址只保留到 Vue 路由的重定向；未构建前端时 `/app/` 返回 503 和启动说明，API 不依赖前端构建。构建产物 `frontend/dist/` 仍被忽略，部署需从源码构建并重启后端；Python 包不再包含旧网页资源。
 
-开发验收入口：启动 FastAPI 后运行 Vite，打开 `http://127.0.0.1:5173/`；不要用 `/frontend-assets/` 作为开发入口。构建版入口为 `http://127.0.0.1:8000/app/`。
+本次整理未运行依赖安装、构建、测试、静态检查、数据库迁移或浏览器验证。

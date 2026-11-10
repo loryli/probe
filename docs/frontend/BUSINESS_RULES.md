@@ -1,12 +1,10 @@
-# 练习场：UI 重设计必须保护的业务规则
+# 前端业务保护规则
 
-日期：2026-11-10。本文用于防止重设计改变资料、状态与调用语义。依据是用户本次要求、当前 AGENTS.md 及实际前后端实现。文中“待确认”不代表授权变更。关联：[审计证据](PROJECT_AUDIT.md)、[实施顺序](REDESIGN_ROADMAP.md)。
+本文是持续有效的业务约束，配合 [前端方案](README.md)、根目录 AGENTS.md 和后端契约使用。保护规则不表示每一项交互都已经实现或验收。
 
-## 1. 本轮操作边界
+## 1. 变更边界
 
-仅创建 `docs/design/PRODUCT_CONTEXT.md`、`PROJECT_AUDIT.md`、`REDESIGN_ROADMAP.md`、`BUSINESS_GUARDRAILS.md`。不改业务代码、后端接口、数据库结构、资源文件或业务流程，不进行页面重构。
-
-后续也不得以“UI 优化”为由改动事务、模型调用、取题规则、结束条件、资料保留或内容版本策略。此类变化必须单独明确范围。默认不由 Agent 主动运行测试、检查、迁移或浏览器验证，由用户启动服务体验。
+前端调整不得隐式改变事务、模型调用、取题规则、结束条件、资料保留或内容版本策略。业务变化需另行明确范围。默认由用户启动服务验收，不主动运行测试、检查、迁移或浏览器验证。
 
 ## 2. 全局不变量
 
@@ -23,7 +21,7 @@
 
 ## 3. 题库与导入
 
-来源：[app.js](../../src/interview_assistant/web/app.js)、[imports.js](../../src/interview_assistant/web/imports.js)、`question_bank/`。
+依据：`frontend/src/views/QuestionBankView.vue` 与后端 `question_bank/`。
 
 - 题干、答案、备注实际变化时追加内容版本；启停、分类变化不应被 UI 当作内容重写。题目编辑只 PATCH 实际改动字段。
 - 分类管理、未分类、搜索、启停筛选、分页、本页勾选及批量移动继续可用。移动提交每题 revision；不扩大成本页之外的隐含全量操作。
@@ -34,7 +32,7 @@
 
 ## 4. 简历、项目与 AI 提取
 
-来源：[materials.js](../../src/interview_assistant/web/materials.js)、[ai_projects.js](../../src/interview_assistant/web/ai_projects.js)、`materials/`。
+依据：`frontend/src/views/MaterialsView.vue` 与后端 `materials/`。
 
 - PDF 原件、提取预览、人工修正草稿、已保存简历版本是不同对象。重新 OCR 或整理换行只返回草稿，保存后才形成简历版本。
 - OCR 支持 auto/force/off；本地识别，首次可能下载引擎模型。不得把本地 OCR 与发送文字到 Qwen 混成同一个“智能识别”动作。
@@ -46,7 +44,7 @@
 
 ## 5. Planner
 
-来源：[planner.js](../../src/interview_assistant/web/planner.js)、`planner/schemas.py`、`planner/service.py`。
+依据：`frontend/src/views/PlannerView.vue` 与后端 `planner/`。
 
 - Planner 规划目标、优先级、来源、预算和追问约束，不输出锁定整场的固定题单。候选资料与目标依据不是“本场必问题数”。
 - 所选简历版本、项目及事实、题目内容版本与候选范围固化；确认前检查资料变化。配置漂移、旧契约、生成失败不能通过更醒目的确认按钮绕过。
@@ -58,7 +56,7 @@
 
 ## 6. 面试、流式状态与恢复
 
-来源：[interview.js](../../src/interview_assistant/web/interview.js)、`interview/router.py`、`interview/service.py`。
+依据：`frontend/src/composables/useInterview.ts`、`frontend/src/api/interviews.ts` 与后端 `interview/`。
 
 - 场次从可用已确认计划创建，冻结运行依据；进度 active/paused/completed 及 current_turn/pending_turn_id 由服务端确定。
 - 一次聚焦当前问题；题库原题与项目事实来源继续可追溯；问题呈现不改成无来源的通用聊天提示。
@@ -73,7 +71,7 @@
 
 ### 时长冲突：保持标记，不自行解决
 
-项目约定是“目标时长仅作参考，到时不强制结束”；当前 `interview/service.py` 有 `BUDGET_GRACE_SEC=300` 及超出宽限后在回答结束时收尾的实现，`interview.html` 也有对应说明。
+项目约定是“目标时长仅作参考，到时不强制结束”；当前 `interview/service.py` 有 `BUDGET_GRACE_SEC=300` 及超出宽限后在回答结束时收尾的实现。
 
 本轮无法确认该差异是否来自后续业务授权。它属于待确认产品规则：UI 重设计既不新增倒计时强制结束，也不删除现有收尾逻辑。布局规格中保留冲突标记；待用户明确后另行同步代码和文案。
 
@@ -89,7 +87,7 @@
 
 交付前由实现者逐项说明，运行验收默认交给用户：
 
-- 页面现有业务入口有无缺失，改变位置后能否找到；DOM ID、监听、模块导入和 hidden 分区是否保持对应。
+- 页面现有业务入口有无缺失，改变位置后能否找到；Vue 路由、组件事件、模块导入和条件渲染是否保持对应。
 - 已保存记录和草稿是否分离；关闭/离开/切换/取消后是否有正确提示；409 后是否保留输入。
 - 点击产生的是读取、保存、确认还是模型调用；按钮忙碌、禁用、重试是否与真实状态一致。
 - 长原文、代码、换行、历史、来源和版本是否可读可达；删除、分类移动和启停语义是否准确。

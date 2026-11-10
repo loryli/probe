@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from interview_assistant import __version__
@@ -77,54 +77,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(MaterialError, material_error_handler)
     app.add_exception_handler(PlannerError, planner_error_handler)
     app.add_exception_handler(InterviewError, interview_error_handler)
-    web_directory = Path(__file__).with_name("web")
-    app.mount("/assets", StaticFiles(directory=web_directory), name="assets")
     frontend_build = Path(__file__).resolve().parents[2] / "frontend" / "dist"
-    if frontend_build.is_dir():
-        frontend_assets = frontend_build / "assets"
-        if frontend_assets.is_dir():
-            app.mount(
-                "/frontend-assets",
-                StaticFiles(directory=frontend_assets),
-                name="frontend-assets",
-            )
+    frontend_index = frontend_build / "index.html"
+    if frontend_index.is_file():
+        # Preserve Vite's assets/ subdirectory beneath its configured base URL.
+        app.mount(
+            "/frontend-assets",
+            StaticFiles(directory=frontend_build),
+            name="frontend-assets",
+        )
 
-        @app.get("/app", response_class=FileResponse, include_in_schema=False)
-        @app.get("/app/{path:path}", response_class=FileResponse, include_in_schema=False)
-        async def frontend_workspace(path: str = "") -> FileResponse:
-            return FileResponse(
-                frontend_build / "index.html",
-                headers={"Cache-Control": "no-cache"},
-            )
-    else:
-        # Keep the existing workflow available until the new frontend is built.
-        @app.get("/app", response_class=FileResponse, include_in_schema=False)
-        @app.get("/app/{path:path}", response_class=FileResponse, include_in_schema=False)
-        async def frontend_workspace_fallback(path: str = "") -> FileResponse:
-            return FileResponse(web_directory / "interview.html", headers={"Cache-Control": "no-cache"})
+    @app.get("/app", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/app/{path:path}", response_class=HTMLResponse, include_in_schema=False)
+    async def frontend_workspace(path: str = "") -> Response:
+        if frontend_index.is_file():
+            return FileResponse(frontend_index, headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(
+            '<!doctype html><html lang="zh-CN"><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>前端尚未构建 · 练习场</title><body>'
+            '<h1>前端尚未构建</h1>'
+            '<p>开发时在 frontend 目录运行 npm ci 和 npm run dev，'
+            '然后访问 <a href="http://127.0.0.1:5173/">开发前端</a>。</p>'
+            '<p>使用构建版时，在 frontend 目录运行 npm run build，'
+            '然后重启后端。API 仍可正常使用。</p></body></html>',
+            status_code=503,
+            headers={"Cache-Control": "no-store"},
+        )
 
-    @app.get("/", response_class=FileResponse, include_in_schema=False)
-    async def workspace() -> Response:
-        if frontend_build.is_dir():
-            return RedirectResponse("/app/", status_code=307)
-        return FileResponse(web_directory / "index.html", headers={"Cache-Control": "no-cache"})
+    @app.get("/", response_class=RedirectResponse, include_in_schema=False)
+    async def workspace() -> RedirectResponse:
+        return RedirectResponse("/app/", status_code=307)
 
-    @app.get("/materials", response_class=FileResponse, include_in_schema=False)
-    async def materials_workspace() -> Response:
-        if frontend_build.is_dir():
-            return RedirectResponse("/app/materials", status_code=307)
-        return FileResponse(web_directory / "materials.html", headers={"Cache-Control": "no-cache"})
+    @app.get("/materials", response_class=RedirectResponse, include_in_schema=False)
+    async def materials_workspace() -> RedirectResponse:
+        return RedirectResponse("/app/materials", status_code=307)
 
-    @app.get("/planner", response_class=FileResponse, include_in_schema=False)
-    async def planner_workspace() -> Response:
-        if frontend_build.is_dir():
-            return RedirectResponse("/app/planner", status_code=307)
-        return FileResponse(web_directory / "planner.html", headers={"Cache-Control": "no-cache"})
+    @app.get("/planner", response_class=RedirectResponse, include_in_schema=False)
+    async def planner_workspace() -> RedirectResponse:
+        return RedirectResponse("/app/planner", status_code=307)
 
-    @app.get("/interview", response_class=FileResponse, include_in_schema=False)
-    async def interview_workspace() -> Response:
-        if frontend_build.is_dir():
-            return RedirectResponse("/app/interviews", status_code=307)
-        return FileResponse(web_directory / "interview.html", headers={"Cache-Control": "no-cache"})
+    @app.get("/interview", response_class=RedirectResponse, include_in_schema=False)
+    async def interview_workspace() -> RedirectResponse:
+        return RedirectResponse("/app/interviews", status_code=307)
 
     return app

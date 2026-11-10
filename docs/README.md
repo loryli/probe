@@ -1,6 +1,6 @@
 # 个人 AI 面试助手：项目设计文档
 
-版本：V1 设计稿 · 2026-11-03
+核心文档：V1 产品与后端设计；当前实现和启动方式以根目录 README.md 为准。
 
 这套文档把「AI面试助手构想」中已达成的产品决策转成可实施的 V1 设计，并依据用户提供的简历更新首发岗位与技术栈建议。前端、具体模型服务和部署位置仍可配置。
 
@@ -13,7 +13,7 @@
 5. [Prompt、结构化输出与 API 草案](./04-AI契约与API草案.md)
 6. [开发阶段与验收标准](./05-开发计划与验收标准.md)
 
-前端选型、后端契约调查与新版体验设计见 [前端选型与体验方案](./design/FRONTEND_SELECTION_AND_UX.md)，迁移顺序见 [前端重设计与迁移路线](./design/REDESIGN_ROADMAP.md)。早期原生页面视觉与 UX 方案效果未获认可，已降为历史参考；业务边界与数据保护原则继续有效。
+前端文档统一位于 [frontend/README.md](frontend/README.md)，包含选型、结构、视觉和运行方式；[BUSINESS_RULES.md](frontend/BUSINESS_RULES.md) 保存必须遵守的业务语义。旧视觉稿、旧组件手册和阶段性审计已删除，历史信息通过 Git 查阅。
 
 ## 核心产品原则
 
@@ -24,7 +24,7 @@
 - 面试时由统一 Interview Agent 根据回答动态追问；实时响应不等待深度分析。
 - V1 先可靠地记录结构化证据，能力模型随使用逐渐演进。
 - 首发方向为大模型应用开发 / AI 全栈；第一版先做文字面试，语音留到后续优化延迟后接入。
-- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、SSE；本地开发默认 SQLite，保留 MySQL，LangGraph、Redis、向量库按实际需要引入。前端已确认转为独立工程：开发服务器代理 FastAPI，生产构建由 FastAPI 同源托管。迁移路线见 [前端重设计与迁移路线](design/REDESIGN_ROADMAP.md)。
+- 技术方案优先使用用户已有经验：Python、FastAPI、Pydantic、SSE；本地开发默认 SQLite，保留 MySQL，LangGraph、Redis、向量库按实际需要引入。前端已确认转为独立工程：开发服务器代理 FastAPI，生产构建由 FastAPI 同源托管。前端方案见 [前端开发方案](frontend/README.md)。
 
 ## 决策状态
 

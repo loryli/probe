@@ -35,9 +35,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-interview_assistant = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

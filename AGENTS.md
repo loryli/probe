@@ -6,7 +6,7 @@
 - `src/interview_assistant` 是单体后端应用，`tests` 存放离线测试，根目录 `README.md` 说明当前实现和启动方式。
 - 设计稿中的候选方案不等于已确认决定；用户后续确认优先于旧设计稿。
 - 按功能逐步添加业务模块，不预建空目录、空服务或多余抽象。
-- 前后端按功能同步推进，交付可在页面验证的流程。当前 `src/interview_assistant/web` 使用原生 HTML/CSS/JavaScript，由 FastAPI 同源提供，启动一次即可使用。
+- 前后端按功能同步推进，交付可在页面验证的流程。前端唯一源码位于 `frontend/`，使用 Vue 3 + TypeScript + Vite；开发时 Vite 代理 FastAPI，生产先构建再由 FastAPI 同源提供。前端设计与目录约定见 `docs/frontend/README.md`，不再维护原生页面或旧设计系统。
 
 ## 产品边界
 
