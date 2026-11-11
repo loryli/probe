@@ -202,7 +202,7 @@ def test_concurrent_confirmation_creates_one_set_of_questions(bank):
         assert client.get("/question-bank/questions").json()["total"] == 2
 
 
-def test_reupload_uses_original_batch_name_and_deleted_questions_are_not_recreated(bank):
+def test_reupload_reuses_draft_and_reimports_after_imported_questions_are_deleted(bank):
     with bank.client() as client:
         draft = preview(client)
         renamed = client.post(ROOT, json={"file_name": "renamed.md", "content": DOCUMENT}).json()
@@ -217,6 +217,16 @@ def test_reupload_uses_original_batch_name_and_deleted_questions_are_not_recreat
         assert replay["replayed"] and replay["question_ids"] == [question_id]
         assert client.get("/question-bank/questions").json()["total"] == 0
         assert client.get(f"/question-bank/questions/{question_id}/source").status_code == 404
+
+        again = preview(client)
+        assert again["id"] != draft["id"] and again["status"] == "draft"
+        assert again["selected_indices"] == []
+        reimported = client.post(
+            f"{ROOT}/{again['id']}/confirm", json={"selected_indices": [0]}
+        ).json()
+        assert not reimported["replayed"] and reimported["question_ids"] != [question_id]
+        assert client.get("/question-bank/questions").json()["total"] == 1
+        assert client.get(f"{ROOT}/{draft['id']}").json()["status"] == "confirmed"
 
 
 def test_code_and_blank_answer_whitespace_stay_in_source_without_becoming_questions():

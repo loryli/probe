@@ -167,6 +167,28 @@ async function deleteCategory(category: Category) {
   try { await apiRequest('/question-bank/categories/batch-delete', postJson({ categories: [{ id: category.id, expected_revision: category.revision }] })); if (categoryFilter.value === category.id) categoryFilter.value = ''; await loadCategories() }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '删除分类失败。分类需为空。' }
 }
+const emptyCategories = computed(() => categories.value.filter((item) => item.question_count === 0))
+const categoryCleanBusy = ref(false)
+async function cleanEmptyCategories() {
+  const empty = emptyCategories.value
+  if (!empty.length || categoryCleanBusy.value) return
+  if (!window.confirm(`删除 ${empty.length} 个空分类？题目、来源与已确认计划不受影响。`)) return
+  categoryCleanBusy.value = true
+  try {
+    const result = await apiRequest<{ deleted: number }>('/question-bank/categories/batch-delete', postJson({
+      categories: empty.map((item) => ({ id: item.id, expected_revision: item.revision })),
+    }))
+    if (empty.some((item) => item.id === categoryFilter.value)) categoryFilter.value = ''
+    await loadCategories()
+    await reload()
+    error.value = ''
+    message.value = `已删除 ${result.deleted} 个空分类。`
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '清理空分类失败，请刷新后重试。'
+  } finally {
+    categoryCleanBusy.value = false
+  }
+}
 async function bulkMove() {
   const moves = questions.value.filter((item) => checkedIds.value.includes(item.id)).map((item) => ({ id: item.id, expected_revision: item.revision }))
   if (!moves.length) return
@@ -244,7 +266,7 @@ onMounted(() => { void reload() })
       </section>
     </div>
 
-    <dialog :open="categoryDialog" class="simple-dialog" @click.self="categoryDialog = false"><form @submit.prevent="createCategory"><p class="eyebrow">ORGANIZE</p><h2>新建分类</h2><input v-model="newCategory" maxlength="60" placeholder="例如：系统设计" /><div class="dialog-actions"><button type="button" class="button button-outline" @click="categoryDialog = false">关闭</button><button class="button button-primary">创建分类</button></div><div class="category-manage-list"><div v-for="category in categories" :key="category.id"><span>{{ category.name }} · {{ category.question_count }} 题</span><button type="button" @click="renameCategory(category)">重命名</button><button type="button" :disabled="category.question_count > 0" @click="deleteCategory(category)">删除</button></div></div></form></dialog>
+    <dialog :open="categoryDialog" class="simple-dialog" @click.self="categoryDialog = false"><form @submit.prevent="createCategory"><p class="eyebrow">ORGANIZE</p><h2>新建分类</h2><input v-model="newCategory" maxlength="60" placeholder="例如：系统设计" /><div class="dialog-actions"><button type="button" class="button button-outline" @click="categoryDialog = false">关闭</button><button class="button button-primary">创建分类</button></div><button v-if="emptyCategories.length" type="button" class="category-clean-action" :disabled="categoryCleanBusy" @click="cleanEmptyCategories()">{{ categoryCleanBusy ? '正在清理…' : `清理空分类（${emptyCategories.length}）` }}</button><div class="category-manage-list"><div v-for="category in categories" :key="category.id"><span>{{ category.name }} · {{ category.question_count }} 题</span><button type="button" @click="renameCategory(category)">重命名</button><button type="button" :disabled="category.question_count > 0" @click="deleteCategory(category)">删除</button></div></div></form></dialog>
     <dialog :open="Boolean(importPreview)" class="import-dialog" @click.self="importPreview = null"><template v-if="importPreview"><header class="import-head"><div><p class="eyebrow">MARKDOWN IMPORT</p><h2>预览并核对候选题</h2><p>{{ importPreview.file_name }} · {{ importPreview.candidates.length }} 个候选</p></div><button class="icon-button" @click="importPreview = null">×</button></header><div class="import-controls"><label>拆分策略 <select v-model="importStrategy"><option value="auto">自动识别</option><option value="h3">三级标题</option><option value="h2">二级标题</option><option value="qa">问答标记</option></select></label><button class="text-action" :disabled="importBusy" @click="createImportPreview()">重新生成预览</button><button class="text-action" @click="selectAll(true)">选中建议项</button><button class="text-action" @click="selectAll(false)">全选</button><button class="text-action" @click="selectedIndices = []">全不选</button></div><p v-for="warning in importPreview.warnings" :key="warning" class="import-warning">{{ warning }}</p><div class="candidate-list"><article v-for="candidate in importPreview.candidates" :key="candidate.index" class="candidate-card"><label class="candidate-check"><input v-model="selectedIndices" type="checkbox" :value="candidate.index" /><span class="candidate-index">{{ String(candidate.index + 1).padStart(2, '0') }}</span></label><div><h3>{{ candidate.question_text || '（题干为空，不能导入）' }}</h3><pre>{{ candidate.standard_answer_text || '没有识别到答案' }}</pre><small>来源行 {{ candidate.start_line }}–{{ candidate.end_line }} <span v-for="warning in candidate.warnings" :key="warning"> · {{ warning }}</span></small></div></article></div><footer class="import-footer"><span>已选择 {{ selectedIndices.length }} 题；确认后会在一个事务中创建题目并保存来源。</span><button class="button button-primary" :disabled="importBusy || !selectedIndices.length" @click="confirmImport()">{{ importBusy ? '正在导入…' : '确认导入' }}</button></footer></template><label v-else class="button button-outline file-button">选择 Markdown<input type="file" accept=".md,.markdown" @change="acceptFile(($event.target as HTMLInputElement).files?.[0])" /></label></dialog>
     <div v-if="message || error" class="toast" :class="{ 'toast-error': error }" role="status"><span>{{ error || message }}</span><button @click="error = ''; message = ''">×</button></div>
   </main>

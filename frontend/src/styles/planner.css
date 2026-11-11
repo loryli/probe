@@ -33,6 +33,7 @@
 :where(.planner-page) .step-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid #e8ece5; color: #9aa197; font-size: 10px; }
 :where(.planner-page) .step-footer .button { min-height: 34px; padding: 0 11px; font-size: 11px; }
 :where(.planner-page) .source-heading { display: flex; justify-content: space-between; align-items: center; margin: 13px 0 6px; color: #5a6758; font-size: 12px; }
+:where(.planner-page) .source-actions { display: flex; gap: 12px; }
 :where(.planner-page) .source-option, :where(.planner-page) .question-source { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 9px; border-bottom: 1px solid #edf0eb; cursor: pointer; }
 :where(.planner-page) .source-option input, :where(.planner-page) .question-source input { accent-color: #738b48; }
 :where(.planner-page) .source-option > span { min-width: 0; flex: 1; display: grid; gap: 4px; }

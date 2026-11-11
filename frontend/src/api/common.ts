@@ -16,8 +16,20 @@ export async function apiRequest<T>(path: string, init?: RequestInit, timeout = 
     throw new RequestError('连接失败或请求超时，已保留当前输入。请重新读取状态后再决定是否重试。', 0)
   }
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { detail?: { message?: string; code?: string } } | null
-    throw new RequestError(payload?.detail?.message ?? `请求未完成（${response.status}）`, response.status, payload?.detail?.code)
+    const payload = await response.json().catch(() => null) as { detail?: unknown } | null
+    const detail = payload?.detail
+    let message: string | undefined
+    let code: string | undefined
+    if (Array.isArray(detail)) {
+      message = detail.map((item) => (
+        item && typeof item === 'object' && 'msg' in item ? String((item as { msg: unknown }).msg) : String(item)
+      )).join('；')
+    } else if (detail && typeof detail === 'object') {
+      const structured = detail as { message?: unknown; code?: unknown }
+      message = structured.message ? String(structured.message) : undefined
+      code = structured.code ? String(structured.code) : undefined
+    }
+    throw new RequestError(message || `请求未完成（${response.status}）`, response.status, code)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>

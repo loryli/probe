@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -128,6 +128,24 @@ class ImportService:
             )
         )
 
+    async def _reusable(self, batch: MarkdownImport) -> bool:
+        """A draft is always reusable; a confirmed batch only while none of its
+        imported questions has been deleted. Once the user deletes an imported
+        question, the next upload starts a new import cycle instead of replaying
+        a confirmation that would never create those questions again."""
+        if batch.status == "draft":
+            return True
+        deleted = await self.session.scalar(
+            select(func.count())
+            .select_from(QuestionImportSource)
+            .join(Question, Question.id == QuestionImportSource.question_id)
+            .where(
+                QuestionImportSource.import_id == batch.id,
+                Question.deleted_at.is_not(None),
+            )
+        )
+        return not deleted
+
     @staticmethod
     def _candidate(batch: MarkdownImport, index: int) -> CandidateRead:
         candidate = Candidate.model_validate(batch.candidates_json[index])
@@ -162,16 +180,36 @@ class ImportService:
         )
 
     async def preview(self, payload: ImportCreate) -> tuple[ImportPreview, bool]:
-        fingerprint = hashlib.sha256(
-            json.dumps([PARSER_VERSION, payload.strategy, payload.content]).encode("utf-8")
-        ).hexdigest()
+        identity = [PARSER_VERSION, payload.strategy, payload.content]
+        content_sha256 = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
         try:
             async with self.session.begin():
-                existing = await self.session.scalar(
-                    select(MarkdownImport).where(MarkdownImport.fingerprint == fingerprint)
+                latest = await self.session.scalar(
+                    select(MarkdownImport)
+                    .where(
+                        MarkdownImport.content_sha256 == content_sha256,
+                        MarkdownImport.requested_strategy == payload.strategy,
+                        MarkdownImport.parser_version == PARSER_VERSION,
+                    )
+                    .order_by(MarkdownImport.created_at.desc(), MarkdownImport.id.desc())
+                    .limit(1)
                 )
-                if existing:
-                    return await self._preview(existing), False
+                if latest is not None and await self._reusable(latest):
+                    return await self._preview(latest), False
+                if latest is not None:
+                    cycle = await self.session.scalar(
+                        select(func.count())
+                        .select_from(MarkdownImport)
+                        .where(
+                            MarkdownImport.content_sha256 == content_sha256,
+                            MarkdownImport.requested_strategy == payload.strategy,
+                            MarkdownImport.parser_version == PARSER_VERSION,
+                        )
+                    )
+                    fingerprint = hashlib.sha256(
+                        json.dumps([*identity, int(cycle or 0)]).encode("utf-8")
+                    ).hexdigest()
                 try:
                     parsed = parse_markdown(payload.content, payload.strategy)
                 except MarkdownLimitError as error:
@@ -180,7 +218,7 @@ class ImportService:
                     fingerprint=fingerprint,
                     file_name=payload.file_name,
                     original_text=payload.content,
-                    content_sha256=hashlib.sha256(payload.content.encode("utf-8")).hexdigest(),
+                    content_sha256=content_sha256,
                     requested_strategy=payload.strategy,
                     resolved_strategy=parsed.strategy,
                     parser_version=PARSER_VERSION,

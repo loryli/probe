@@ -25,6 +25,7 @@ const planTotal = ref(0)
 const dirty = ref(false)
 const modelReady = computed(() => Boolean(options.value?.model.configured))
 const projectsForVersion = computed(() => options.value?.projects.filter((item) => item.source_version === selectedVersion.value) ?? [])
+const maxQuestions = computed(() => options.value?.limits.max_questions ?? 40)
 const sourceBalance = computed(() => Math.round(config.value.project_ratio * 100))
 const pendingPlanRequest = ref<{ signature: string; id: string } | null>(null)
 let syncingOptions = false
@@ -51,7 +52,31 @@ async function initialize() {
   catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取规划资料。' }
   finally { loading.value = false; syncingOptions = false }
 }
-function selectAllSources() { selectedProjects.value = projectsForVersion.value.map((item) => item.id); selectedQuestions.value = options.value?.questions.map((item) => item.id) ?? [] }
+function questionOrder(ids: string[]) {
+  const order = new Map((options.value?.questions ?? []).map((item, index) => [item.id, index]))
+  return [...ids].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+}
+function sampleQuestions() {
+  const pool = options.value?.questions ?? []
+  const indices = pool.map((_, index) => index)
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[indices[i], indices[j]] = [indices[j], indices[i]]
+  }
+  return indices.slice(0, Math.min(maxQuestions.value, pool.length)).sort((a, b) => a - b).map((index) => pool[index].id)
+}
+function selectAllSources() { selectedProjects.value = projectsForVersion.value.map((item) => item.id); selectedQuestions.value = sampleQuestions() }
+function toggleQuestion(id: string) {
+  if (selectedQuestions.value.includes(id)) {
+    selectedQuestions.value = selectedQuestions.value.filter((item) => item !== id)
+  } else if (selectedQuestions.value.length >= maxQuestions.value) {
+    error.value = `最多选择 ${maxQuestions.value} 道题，请先取消其他题目。`
+    return
+  } else {
+    selectedQuestions.value = questionOrder([...selectedQuestions.value, id])
+  }
+  dirty.value = true
+}
 watch(selectedResume, async (id) => {
   if (!id || syncingOptions) return
   syncingOptions = true
@@ -153,7 +178,7 @@ onMounted(() => { void initialize() })
         <template v-else>
           <div class="planner-form-head"><div><p class="eyebrow">BUILD A SESSION PLAN</p><h2>先确定训练的边界。</h2><p>选择依据、方向与节奏。完成配置后才会调用规划服务。</p></div><div class="planner-steps"><button v-for="n in 3" :key="n" :class="{ active: step === n, done: step > n }" @click="step = n">0{{ n }}</button></div></div>
           <div v-if="step === 1" class="plan-step"><div class="step-intro"><span>01</span><div><h3>训练依据</h3><p>选择一份已保存的简历版本。项目始终绑定明确的来源版本。</p></div></div><div class="form-grid"><label>简历<select v-model="selectedResume" @change="dirty = true"><option value="" disabled>选择简历</option><option v-for="item in options?.resumes" :key="item.id" :value="item.id">{{ item.name }}{{ item.is_active ? ' · 使用中' : '' }}</option></select></label><label>资料版本<select v-model.number="selectedVersion" @change="dirty = true"><option v-for="item in options?.versions" :key="item.version" :value="item.version">v{{ item.version }} · {{ item.name }}</option></select></label><label>生成方式<select :value="config.mode" @change="updateConfig('mode', ($event.target as HTMLSelectElement).value as 'model' | 'rule')"><option value="model">模型规划</option><option value="rule">规则规划</option></select></label></div><p class="inline-note" :class="{ warning: config.mode === 'model' && !modelReady }">{{ config.mode === 'rule' ? '规则模式不调用模型，目标将使用程序化规划。' : modelReady ? '模型规划已配置。生成会调用模型服务。' : '尚未检测到模型配置；可切换规则模式，或稍后再生成。' }}</p></div>
-          <div v-else-if="step === 2" class="plan-step"><div class="step-intro"><span>02</span><div><h3>材料范围</h3><p>候选资料池决定 Planner 可引用什么。题库目标依据会用已启用的题干。</p></div></div><div class="source-heading"><b>项目经历</b><button class="text-action" @click="selectedProjects = selectedProjects.length ? [] : projectsForVersion.map((item) => item.id)">{{ selectedProjects.length ? '清空' : '全选' }}</button></div><label v-for="item in projectsForVersion" :key="item.id" class="source-option"><input type="checkbox" :checked="selectedProjects.includes(item.id)" @change="selectedProjects = toggle(item.id, selectedProjects); dirty = true"/><span><strong>{{ item.name }}</strong><small>{{ item.fact_count }} 条已保存事实 · {{ item.tech_stack.join(' / ') }}</small></span><i>v{{ item.source_version }}</i></label><p v-if="!projectsForVersion.length" class="inline-note">该版本尚无项目事实。可只使用题库题。</p><div class="source-heading second-source"><b>个人题库 · {{ options?.question_total || 0 }} 道可用题</b><button class="text-action" @click="selectedQuestions = selectedQuestions.length ? [] : options?.questions.map((item) => item.id) || []">{{ selectedQuestions.length ? '清空' : '全选' }}</button></div><div class="question-source-list"><label v-for="item in options?.questions" :key="item.id" class="question-source"><input type="checkbox" :checked="selectedQuestions.includes(item.id)" @change="selectedQuestions = toggle(item.id, selectedQuestions); dirty = true"/><span>{{ item.question_text }}</span><small>v{{ item.content_version }}</small></label></div></div>
+          <div v-else-if="step === 2" class="plan-step"><div class="step-intro"><span>02</span><div><h3>材料范围</h3><p>候选资料池决定 Planner 可引用什么。题库目标依据会用已启用的题干。</p></div></div><div class="source-heading"><b>项目经历</b><button class="text-action" @click="selectedProjects = selectedProjects.length ? [] : projectsForVersion.map((item) => item.id)">{{ selectedProjects.length ? '清空' : '全选' }}</button></div><label v-for="item in projectsForVersion" :key="item.id" class="source-option"><input type="checkbox" :checked="selectedProjects.includes(item.id)" @change="selectedProjects = toggle(item.id, selectedProjects); dirty = true"/><span><strong>{{ item.name }}</strong><small>{{ item.fact_count }} 条已保存事实 · {{ item.tech_stack.join(' / ') }}</small></span><i>v{{ item.source_version }}</i></label><p v-if="!projectsForVersion.length" class="inline-note">该版本尚无项目事实。可只使用题库题。</p><div class="source-heading second-source"><b>个人题库 · {{ options?.question_total || 0 }} 道可用题，已选 {{ selectedQuestions.length }} / {{ maxQuestions }}</b><span class="source-actions"><button class="text-action" @click="selectedQuestions = sampleQuestions(); dirty = true">随机重选 {{ maxQuestions }} 道</button><button class="text-action" @click="selectedQuestions = []; dirty = true">清空</button></span></div><div class="question-source-list"><label v-for="item in options?.questions" :key="item.id" class="question-source"><input type="checkbox" :checked="selectedQuestions.includes(item.id)" @change="toggleQuestion(item.id)"/><span>{{ item.question_text }}</span><small>v{{ item.content_version }}</small></label></div></div>
           <div v-else class="plan-step"><div class="step-intro"><span>03</span><div><h3>方向与节奏</h3><p>规划关注点和时间预算，系统会在目标内部动态提问。</p></div></div><div class="form-grid"><label class="wide-field">训练方向<input :value="config.direction" maxlength="500" placeholder="例如：RAG 可靠性、Agent 状态管理与服务交付" @input="updateConfig('direction', ($event.target as HTMLInputElement).value)"/></label><label>目标时长<select :value="config.duration_minutes" @change="updateConfig('duration_minutes', Number(($event.target as HTMLSelectElement).value))"><option v-for="minutes in [20,30,45,60,90,120]" :key="minutes" :value="minutes">{{ minutes }} 分钟</option></select></label><label>追问总上限<input type="number" min="0" max="30" :value="config.max_total_followups" @input="updateConfig('max_total_followups', Number(($event.target as HTMLInputElement).value))"/></label></div><div class="ratio-control"><div><b>题源时间比例</b><small>当前项目资料 {{ projectsForVersion.length }} 组 · 题库 {{ options?.questions.length || 0 }} 道</small></div><label>项目 {{ sourceBalance }}%<input type="range" min="0" max="100" :value="sourceBalance" @input="updateConfig('project_ratio', Number(($event.target as HTMLInputElement).value) / 100)"/></label><label>题库 {{ 100 - sourceBalance }}%</label></div><p class="inline-note">目标时长用于节奏参考，不代表强制结束时间。追问边界由总预算和目标约束共同决定。</p></div>
           <footer class="step-footer"><button class="button button-outline" :disabled="step === 1" @click="step--">← 上一步</button><span>第 {{ step }} / 3 步 · 此处仅收集配置</span><button v-if="step < 3" class="button button-primary" @click="step++">继续 →</button><button v-else class="button button-primary" :disabled="generating || loading" @click="generate()">{{ generating ? '正在生成…' : '生成计划' }} ↗</button></footer>
         </template>

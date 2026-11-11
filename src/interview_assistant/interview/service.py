@@ -1,6 +1,5 @@
 """文字面试运行时：冻结计划、先落库回答再决策、状态守卫与断点续接。"""
 
-import asyncio
 import logging
 import re
 import time
@@ -15,7 +14,7 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from interview_assistant.ai.qwen import ModelError, QwenModel, configuration_status
 from interview_assistant.config import Settings
-from interview_assistant.database import Database, utc_now
+from interview_assistant.database import utc_now
 from interview_assistant.interview import rules, variety
 from interview_assistant.interview.models import (
     InterviewReport,
@@ -72,10 +71,12 @@ from interview_assistant.planner.schemas import (
 )
 from interview_assistant.planner.service import PlannerError, PlannerService
 from interview_assistant.planner.text import plain_text
+from interview_assistant.interview.errors import InterviewError, conflict
+from interview_assistant.interview.questioning import NextTurn, QuestioningService
+from interview_assistant.interview.reporting import ReportService
 
 logger = logging.getLogger(__name__)
 
-BUDGET_GRACE_SEC = 300
 MAX_TURNS_IN_PROMPT = 3
 OPTION_PLAN_LIMIT = 50
 # 回答短于这个长度视为「没有可追问的内容」（如“不知道”），不追问细节，改问更基础的方面。
@@ -83,123 +84,6 @@ MIN_SUBSTANTIVE_ANSWER = 8
 REPORT_MAX_TOKENS = 2000
 # 决策只输出一小段 JSON，单独限长可以尽早截断跑偏的输出。
 DECISION_MAX_TOKENS = 500
-
-
-class InterviewError(Exception):
-    def __init__(self, code: str, message: str, status: int = 422) -> None:
-        self.code, self.message, self.status = code, message, status
-
-
-def conflict() -> InterviewError:
-    return InterviewError("revision_conflict", "场次已被修改，请重新读取后再操作", 409)
-
-
-async def run_decision(
-    database: Database, settings: Settings, session_id: str, answer_turn_id: str,
-) -> None:
-    """后台跑一次决策：用独立会话，异常也写回错误码，避免前端一直等不到结果。"""
-    try:
-        async with database.sessions() as session:
-            await InterviewService(session, settings).decide(session_id, answer_turn_id)
-    except Exception:
-        logger.exception("Interview decision task failed; session_id=%s", session_id)
-        try:
-            async with database.sessions() as session:
-                await InterviewService(session, settings).set_error(
-                    session_id,
-                    ModelError("decision_task_failed", "生成下一步失败，请点「重试下一步」"),
-                )
-        except Exception:
-            logger.exception(
-                "Interview decision failure not recorded; session_id=%s", session_id,
-            )
-
-
-# ---------- 流式进度 ----------
-
-_LIVE_TTL_SEC = 120
-_LIVE: dict[str, "LiveStream"] = {}
-
-
-@dataclass(slots=True)
-class LiveStream:
-    """一次决策的实时状态：已产出的文本、是否结束、最终快照或错误。
-
-    客户端可以在任意时刻接入：先读已有的 text，再继续等增量。
-    这样客户端断开重连不会丢进度，也不会重复调用模型。
-    """
-
-    text: str = ""
-    running: bool = False
-    done: bool = False
-    snapshot: "SessionRead | None" = None
-    error: ModelError | None = None
-
-    def write(self, piece: str) -> None:
-        self.text += piece
-
-
-def live_stream(session_id: str, turn_id: str) -> LiveStream:
-    key = f"{session_id}:{turn_id}"
-    live = _LIVE.get(key)
-    if live is None:
-        live = LiveStream()
-        _LIVE[key] = live
-        try:
-            loop = asyncio.get_running_loop()
-            loop.call_later(_LIVE_TTL_SEC, _LIVE.pop, key, None)
-        except RuntimeError:
-            pass
-    return live
-
-
-async def run_decision_stream(
-    database: Database, settings: Settings, session_id: str, answer_turn_id: str,
-) -> None:
-    """后台流式决策：文本写进 LiveStream 供 SSE 转发，结束时补齐最终快照。"""
-    live = live_stream(session_id, answer_turn_id)
-    if live.running or live.done:
-        return
-    live.running = True
-    try:
-        async with database.sessions() as session:
-            await InterviewService(session, settings).decide_stream(
-                session_id, answer_turn_id, emit=live.write,
-            )
-    except Exception:
-        logger.exception("Interview stream decision failed; session_id=%s", session_id)
-        try:
-            async with database.sessions() as session:
-                await InterviewService(session, settings).set_error(
-                    session_id,
-                    ModelError("decision_task_failed", "生成下一步失败，请点「重试下一步」"),
-                )
-        except Exception:
-            logger.exception(
-                "Interview decision failure not recorded; session_id=%s", session_id,
-            )
-    finally:
-        live.running = False
-        try:
-            async with database.sessions() as session:
-                live.snapshot = await InterviewService(session, settings).get(session_id)
-        except Exception:
-            logger.exception("Interview stream snapshot failed; session_id=%s", session_id)
-        # 快照就绪后才置为结束，避免订阅方在 snapshot 为空时提前收尾。
-        live.done = True
-
-
-@dataclass(slots=True)
-class NextTurn:
-    """一次待写入的问题轮次，附带该轮对进度的变更。"""
-
-    objective_id: str
-    source: str
-    text: str
-    question_id: str | None = None
-    is_followup: bool = False
-    activate: bool = False
-    advance_cursor: bool = False
 
 
 @dataclass(slots=True)
@@ -292,11 +176,10 @@ class InterviewService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
         self.settings = settings
-        # 一次请求内复用：顺序与历史用量都可重算，缓存只为少查几次。
-        self._bank_orders: dict[tuple[str, str], list[SnapshotQuestion]] = {}
-        self._objective_orders: dict[str, list[PlanRuntimeObjective]] = {}
-        self._usage: dict[tuple[str, str], dict[str, int]] = {}
-        self._avoid: dict[str, list[str]] = {}
+        # 组合对象共享同一个 AsyncSession；事务边界仍由本类各方法持有，
+        # 子对象不开启跨服务事务，也不缓存跨请求的数据库状态。
+        self.questions = QuestioningService(self)
+        self.reports = ReportService(self)
 
     # ---------- 读取 ----------
 
@@ -621,118 +504,6 @@ class InterviewService:
         await self._ask_next(session_id)
         return await self.get(session_id), True
 
-    async def _ensure_outline(
-        self, session_id: str, *,
-        objectives: list[PlanRuntimeObjective] | None = None,
-        limit: int | None = None,
-    ) -> None:
-        """按目标增量生成基础问题骨架；失败只降级，不阻断创建或出题。
-
-        创建场次时只为前 `limit` 个目标生成，其余目标在真正轮到它时再补，
-        这样「开始面试」的等待与单轮出题同量级，而不是一次批量生成整场题单。
-        """
-        async with self.session.begin():
-            row = await self.require_session(session_id)
-            runtime = PlanRuntime.model_validate(row.runtime_json)
-            mode = row.mode
-            current = SessionOutline.model_validate(row.outline_json or {})
-        # 顺序必须与 _ask_next 取目标的顺序一致，否则预生成的不是第一题，
-        # 开场会白跑一次模型调用再补一次。
-        targets = [
-            item for item in self._objective_order(runtime, session_id=session_id)
-            if item.source == "project"
-        ]
-        if objectives is not None:
-            wanted = {item.id for item in objectives}
-            targets = [item for item in targets if item.id in wanted]
-        covered = {item.objective_id for item in current.objectives}
-        targets = [item for item in targets if item.id not in covered]
-        if limit is not None:
-            targets = targets[:limit]
-        if not targets:
-            return
-        extra = await self._build_outline(session_id, runtime, mode, targets)
-        if not extra.objectives:
-            return
-        async with self.session.begin():
-            row = await self.require_session(session_id, lock=True)
-            existing = SessionOutline.model_validate(row.outline_json or {})
-            covered = {item.objective_id for item in existing.objectives}
-            added = [item for item in extra.objectives if item.objective_id not in covered]
-            if not added:
-                return
-            source = "model" if "model" in {existing.source, extra.source} else extra.source
-            row.outline_json = SessionOutline(
-                source=source, objectives=existing.objectives + added,
-            ).model_dump(mode="json")
-            await self.session.flush()
-
-    async def _build_outline(
-        self, session_id: str, runtime: PlanRuntime, mode: str,
-        targets: list[PlanRuntimeObjective],
-    ) -> SessionOutline:
-        if mode == "rule" or not targets:
-            return self._rule_outline(session_id, runtime, targets)
-        if not configuration_status(self.settings)["configured"]:
-            logger.info("Interview outline skipped; model not configured session_id=%s", session_id)
-            return SessionOutline(source="fallback")
-        model = QwenModel(self.settings)
-        try:
-            draft = await model.generate(
-                messages=outline_messages(runtime=runtime, objectives=targets),
-                output_type=OutlineDraft,
-                prompt_version=OUTLINE_PROMPT_VERSION,
-                schema_version=OUTLINE_SCHEMA_VERSION,
-                temperature=self.settings.qwen_interview_temperature,
-            )
-        except ModelError as failure:
-            # 骨架只是加速手段：生成失败时仍然可以用即时出题走完整场次。
-            logger.warning(
-                "Interview outline failed; session_id=%s code=%s", session_id, failure.code,
-            )
-            return SessionOutline(source="fallback")
-        assert isinstance(draft, OutlineDraft)
-        known = {item.id for item in targets}
-        objectives = [item for item in draft.objectives if item.objective_id in known]
-        # 模型漏掉的目标用规则骨架补上：骨架必须「必命中」，
-        # 否则开场白跑一次模型调用再为同一个目标补一次即时出题。
-        covered = {item.objective_id for item in objectives}
-        missing = [item for item in targets if item.id not in covered]
-        if missing:
-            objectives.extend(self._rule_outline(session_id, runtime, missing).objectives)
-        if not objectives:
-            return SessionOutline(source="fallback")
-        return SessionOutline(source="model", objectives=objectives)
-
-    def _rule_outline(
-        self, session_id: str, runtime: PlanRuntime, targets: list[PlanRuntimeObjective],
-    ) -> SessionOutline:
-        """规则模式用同一套事实模板生成骨架，保证两种模式的取题路径一致。"""
-        seed = variety.session_seed(session_id)
-        objectives: list[OutlineObjective] = []
-        for objective in targets:
-            facts = self._objective_facts(runtime, objective, seed=seed)
-            questions = [
-                OutlineQuestion(
-                    text=rules.project_question(name, fact_type, content)[:300],
-                )
-                for name, fact_type, content in facts[:PROJECT_BASE_QUESTIONS]
-            ]
-            if questions:
-                objectives.append(OutlineObjective(
-                    objective_id=objective.id, questions=questions,
-                ))
-        return SessionOutline(source="rule", objectives=objectives)
-
-    def _outline_question(
-        self, outline: SessionOutline, objective: PlanRuntimeObjective, state: ObjectiveProgress,
-    ) -> str:
-        """按「已问过的基础问题数」取骨架题；没有就返回空串，由调用方回退。"""
-        items = outline.questions(objective.id)
-        index = state.asked - state.followups
-        if 0 <= index < len(items):
-            return items[index].text[:400]
-        return ""
 
     async def _ask_next(self, session_id: str) -> None:
         """出题的兜底边界：未预期异常变成场次上的可见错误，而不是 500。
@@ -1169,6 +940,8 @@ class InterviewService:
                     objective.max_followups - state.followups,
                     runtime.constraints.max_total_followups - progress.followups_used,
                 ))
+                # 目标时长只作节奏参考：超时不再新增追问，但仍可切目标或同目标续问，
+                # 不因到时强制结束；结束由用户主动操作或所有考察目标完成后触发。
                 follow_up_allowed = followups_remaining > 0 and remaining > -60
                 base_remaining = self._base_remaining(objective, state)
                 # 题库取题顺序依赖历史用量；在本事务内取一次即可。
@@ -1176,77 +949,72 @@ class InterviewService:
 
                 next_turn: NextTurn | None = None
                 action = "switch"
-                if remaining < -BUDGET_GRACE_SEC:
-                    # 软预算只到这一步：本轮回答已处理完，超过宽限就自然收尾。
-                    self._finish(row, progress, "已超过计划时长，场次自然收尾。")
-                    action = "complete"
-                else:
-                    # 回答几乎没有内容（如“不知道”）时不再追问细节，换更基础的问法或直接切题。
-                    answer_text = answer_turn.text or ""
-                    substantive = len(answer_text.strip()) >= MIN_SUBSTANTIVE_ANSWER
-                    # say 已经流式展示给用户，落库必须用同一句，否则页面会跳变。
-                    spoken = decision.spoken
-                    if decision.objective_status == "covered":
-                        state.status = "covered"
-                    elif (follow_up_allowed and substantive and spoken
-                          and (decision.follow_up_needed
-                               or decision.objective_status == "insufficient")):
+                # 回答几乎没有内容（如“不知道”）时不再追问细节，换更基础的问法或直接切题。
+                answer_text = answer_turn.text or ""
+                substantive = len(answer_text.strip()) >= MIN_SUBSTANTIVE_ANSWER
+                # say 已经流式展示给用户，落库必须用同一句，否则页面会跳变。
+                spoken = decision.spoken
+                if decision.objective_status == "covered":
+                    state.status = "covered"
+                elif (follow_up_allowed and substantive and spoken
+                      and (decision.follow_up_needed
+                           or decision.objective_status == "insufficient")):
+                    next_turn = NextTurn(
+                        objective.id, objective.source,
+                        spoken[:300], is_followup=True,
+                    )
+                    action = "follow_up"
+                elif base_remaining > 0 and decision.next_objective_id == objective.id:
+                    # 同目标续问：模型刚说的话优先，骨架只作兜底。
+                    text = spoken or self._outline_question(outline, objective, state)
+                    if text:
+                        next_turn = NextTurn(objective.id, objective.source, text[:400])
+                        action = "continue"
+                elif base_remaining > 0 and objective.source == "question_bank":
+                    snapshot = self._pick_bank(
+                        self._bank_order(row.plan_id, session_id, runtime, objective),
+                        state.cursor,
+                    )
+                    if snapshot is not None:
                         next_turn = NextTurn(
-                            objective.id, objective.source,
-                            spoken[:300], is_followup=True,
-                        )
-                        action = "follow_up"
-                    elif base_remaining > 0 and decision.next_objective_id == objective.id:
-                        # 同目标续问：模型刚说的话优先，骨架只作兜底。
-                        text = spoken or self._outline_question(outline, objective, state)
-                        if text:
-                            next_turn = NextTurn(objective.id, objective.source, text[:400])
-                            action = "continue"
-                    elif base_remaining > 0 and objective.source == "question_bank":
-                        snapshot = self._pick_bank(
-                            self._bank_order(row.plan_id, session_id, runtime, objective),
-                            state.cursor,
-                        )
-                        if snapshot is not None:
-                            next_turn = NextTurn(
-                                objective.id, "question_bank",
-                                plain_text(snapshot.question_text)[:400],
-                                question_id=str(snapshot.id), advance_cursor=True,
-                            )
-                            action = "continue"
-                        else:
-                            state.status = "covered"
-                    elif base_remaining > 0:
-                        next_turn = NextTurn(
-                            objective.id, "project",
-                            self._outline_question(outline, objective, state)
-                            or self._project_question(
-                                runtime, objective, state,
-                                seed=variety.session_seed(session_id),
-                            ),
+                            objective.id, "question_bank",
+                            plain_text(snapshot.question_text)[:400],
+                            question_id=str(snapshot.id), advance_cursor=True,
                         )
                         action = "continue"
                     else:
                         state.status = "covered"
+                elif base_remaining > 0:
+                    next_turn = NextTurn(
+                        objective.id, "project",
+                        self._outline_question(outline, objective, state)
+                        or self._project_question(
+                            runtime, objective, state,
+                            seed=variety.session_seed(session_id),
+                        ),
+                    )
+                    action = "continue"
+                else:
+                    state.status = "covered"
 
-                    if next_turn is not None:
-                        # 追问与同目标续问在本轮决策里已给出措辞，必须落库，
-                        # 否则场次会停在「当前没有待回答的问题」。
-                        await self._create_turn(row, progress, next_turn)
+                if next_turn is not None:
+                    # 追问与同目标续问在本轮决策里已给出措辞，必须落库，
+                    # 否则场次会停在「当前没有待回答的问题」。
+                    await self._create_turn(row, progress, next_turn)
+                else:
+                    picked = await self._next_turn(
+                        runtime, progress, outline=outline,
+                        plan_id=row.plan_id, session_id=session_id,
+                        preferred=decision.next_objective_id,
+                        fallback_text=spoken,
+                    )
+                    if picked is None:
+                        self._finish(row, progress, "所有考察目标已完成，场次自动结束。")
+                        action = "complete"
                     else:
-                        picked = await self._next_turn(
-                            runtime, progress, outline=outline,
-                            plan_id=row.plan_id, session_id=session_id,
-                            preferred=decision.next_objective_id,
-                            fallback_text=spoken,
-                        )
-                        if picked is None:
-                            self._finish(row, progress, "所有考察目标已完成，场次自动结束。")
-                            action = "complete"
-                        else:
-                            plan, _ = picked
-                            await self._create_turn(row, progress, plan)
-                            action = "switch" if plan.objective_id != objective.id else "continue"
+                        plan, _ = picked
+                        await self._create_turn(row, progress, plan)
+                        action = "switch" if plan.objective_id != objective.id else "continue"
 
                 answer_turn.decision_json = TurnDecision(
                     objective_status=decision.objective_status,
@@ -1339,427 +1107,7 @@ class InterviewService:
             await self.session.flush()
             return self.read(row, await self.turns(session_id))
 
-    # ---------- 整场复盘 ----------
 
-    async def get_report(self, session_id: str) -> ReportRead | None:
-        async with self.session.begin():
-            row = await self.session.scalar(
-                select(InterviewReport).where(InterviewReport.session_id == session_id)
-            )
-            return self._report_read(row) if row is not None else None
-
-    async def report(
-        self, session_id: str, payload: ReportCreate,
-    ) -> tuple[ReportRead, bool]:
-        """为已结束的场次生成整场复盘；每场一份，失败行可被重试覆盖。"""
-        request_key = str(payload.request_id)
-        async with self.session.begin():
-            row = await self.require_session(session_id)
-            if row.status != "completed":
-                raise InterviewError(
-                    "session_not_completed",
-                    "只有已结束的场次才能生成复盘；请先结束面试",
-                    409,
-                )
-            existing = await self.session.scalar(
-                select(InterviewReport).where(InterviewReport.session_id == session_id)
-            )
-            # 重放同一请求标识或已有成品：直接返回，不重复调用模型。
-            if existing is not None and (
-                existing.request_key == request_key or existing.status == "ready"
-            ):
-                return self._report_read(existing), False
-            runtime = PlanRuntime.model_validate(row.runtime_json)
-            progress = SessionProgress.model_validate(row.progress_json)
-            turns = await self.turns(session_id)
-            ended = row.ended_at or utc_now()
-            elapsed_sec = max(0, int((ended - row.started_at).total_seconds()))
-            rounds = self._report_rounds(turns)
-            stats = self._report_stats(progress, turns, elapsed_sec)
-            mode = row.mode
-
-        if mode != "rule" and configuration_status(self.settings)["configured"]:
-            content, error = await self._model_report(runtime, rounds, elapsed_sec)
-        else:
-            content, error = self._rule_report(runtime, progress, turns), None
-
-        async with self.session.begin():
-            row = await self.session.scalar(
-                select(InterviewReport)
-                .where(InterviewReport.session_id == session_id)
-                .with_for_update()
-            )
-            if row is None:
-                row = InterviewReport(
-                    session_id=session_id, status="ready", source="model",
-                    stats_json=stats, request_key=request_key,
-                )
-                self.session.add(row)
-            row.request_key = request_key
-            row.stats_json = stats
-            row.updated_at = utc_now()
-            if error is None:
-                row.status = "ready"
-                row.source = "model" if mode != "rule" else "rule"
-                row.report_json = content.model_dump(mode="json")
-                row.error_code = None
-                row.error_message = None
-            else:
-                # Offline 失败保留状态供页面提示与重试；不影响已保存的场次数据。
-                row.status = "failed"
-                row.report_json = None
-                row.error_code = error.code
-                row.error_message = error.message[:500]
-            await self.session.flush()
-            return self._report_read(row), True
-
-    async def _model_report(
-        self, runtime: PlanRuntime, rounds: list[dict[str, object]], elapsed_sec: int,
-    ) -> tuple[ReportContent | None, ModelError | None]:
-        """调用模型生成复盘；失败返回错误而不是抛出，让调用方落库 failed 行。"""
-        model = QwenModel(self.settings)
-        try:
-            draft = await model.generate(
-                messages=report_messages(
-                    runtime=runtime, rounds=rounds, elapsed_sec=elapsed_sec,
-                ),
-                output_type=ReportDraft,
-                prompt_version=REPORT_PROMPT_VERSION,
-                schema_version=REPORT_SCHEMA_VERSION,
-                temperature=self.settings.qwen_interview_temperature,
-                max_tokens=REPORT_MAX_TOKENS,
-            )
-        except ModelError as failure:
-            return None, failure
-        if not isinstance(draft, ReportDraft):
-            return None, ModelError(
-                "model_invalid_output", "模型结果未通过校验，复盘未保存",
-            )
-        return self._sanitize_report(draft, runtime), None
-
-    def _rule_report(
-        self, runtime: PlanRuntime, progress: SessionProgress, turns: list[InterviewTurn],
-    ) -> ReportContent:
-        """规则复盘只做统计与证据索引，不做语义评价。"""
-        answers = [item for item in turns if item.role == "candidate"]
-        by_objective: dict[str, list[int]] = {}
-        for item in answers:
-            if item.objective_id:
-                by_objective.setdefault(item.objective_id, []).append(item.sequence)
-        status_map = {"covered": "covered", "skipped": "missed", "active": "partial"}
-        evaluations: list[ReportEvaluation] = []
-        for objective in runtime.objectives:
-            state = progress.state(objective.id)
-            status = status_map.get(state.status, "missed")
-            sequences = by_objective.get(objective.id, [])
-            evaluations.append(ReportEvaluation(
-                objective_id=objective.id,
-                status=status,
-                comment=(
-                    f"规则模式统计：问 {state.asked} 轮，追问 {state.followups} 次，"
-                    f"最终状态 {state.status}；语义评价需用模型模式生成。"
-                ),
-                turn_sequences=sequences[:4],
-            ))
-        covered = sum(1 for item in evaluations if item.status == "covered")
-        overall = "solid" if covered >= max(1, len(evaluations)) else (
-            "mixed" if covered else "weak"
-        )
-        return ReportContent(
-            overall=overall,
-            summary=(
-                f"规则模式复盘：共 {len(answers)} 轮回答，"
-                f"覆盖 {covered}/{len(evaluations)} 个目标。"
-                "要获得逐目标评价、弱项与练习建议，请用模型模式生成复盘。"
-            ),
-            evaluations=evaluations,
-            weak_topics=[
-                item.topic for item in runtime.objectives
-                if progress.state(item.id).status not in {"covered", "skipped"}
-            ][:5],
-            suggestions=["用 Qwen 面试官模式重新生成复盘，获取逐目标评价与练习建议。"],
-        )
-
-    def _sanitize_report(
-        self, draft: ReportDraft, runtime: PlanRuntime,
-    ) -> ReportContent:
-        """只保留已知目标；模型漏掉或编造的目标 ID 不进入报告。"""
-        known = {item.id for item in runtime.objectives}
-        order = {item.id: index for index, item in enumerate(runtime.objectives)}
-        evaluations = [
-            item for item in draft.evaluations if item.objective_id in known
-        ]
-        evaluations.sort(key=lambda item: order.get(item.objective_id, 0))
-        return ReportContent(
-            overall=draft.overall,
-            summary=draft.summary,
-            evaluations=evaluations,
-            weak_topics=draft.weak_topics,
-            suggestions=draft.suggestions,
-            risks=draft.risks,
-        )
-
-    @staticmethod
-    def _report_rounds(turns: list[InterviewTurn]) -> list[dict[str, object]]:
-        """问答成对压缩：每轮给模型问题、回答、目标与当时的判定。"""
-        question_by_id = {
-            item.id: item for item in turns if item.role == "interviewer"
-        }
-        rounds: list[dict[str, object]] = []
-        for item in turns:
-            if item.role != "candidate" or item.answers_turn_id is None:
-                continue
-            question = question_by_id.get(item.answers_turn_id)
-            decision = item.decision_json or {}
-            rounds.append({
-                "sequence": item.sequence,
-                "objective_id": item.objective_id,
-                "is_followup": bool(question is not None and question.is_followup),
-                "question": plain_text(question.text)[:200] if question else "",
-                "answer": plain_text(item.text)[:600],
-                "decision": {
-                    "objective_status": decision.get("objective_status", ""),
-                    "observation": (decision.get("observation") or "")[:120],
-                },
-            })
-        return rounds
-
-    @staticmethod
-    def _report_stats(
-        progress: SessionProgress, turns: list[InterviewTurn], elapsed_sec: int,
-    ) -> dict[str, int]:
-        answers = [item for item in turns if item.role == "candidate"]
-        questions = [item for item in turns if item.role == "interviewer"]
-        return {
-            "answer_count": len(answers),
-            "question_count": len(questions),
-            "followups_used": sum(
-                1 for item in questions if item.is_followup
-            ),
-            "objective_total": len(progress.objectives),
-            "objective_covered": sum(
-                1 for item in progress.objectives if item.status == "covered"
-            ),
-            "elapsed_sec": elapsed_sec,
-            "input_tokens": sum(item.input_tokens or 0 for item in turns),
-            "output_tokens": sum(item.output_tokens or 0 for item in turns),
-        }
-
-    @staticmethod
-    def _report_read(row: InterviewReport) -> ReportRead:
-        report = (
-            ReportContent.model_validate(row.report_json)
-            if row.report_json is not None else None
-        )
-        return ReportRead(
-            id=UUID(row.id),
-            session_id=UUID(row.session_id),
-            status=row.status,  # type: ignore[arg-type]
-            source=row.source,  # type: ignore[arg-type]
-            report=report,
-            stats={key: int(value) for key, value in (row.stats_json or {}).items()},
-            error_code=row.error_code,
-            error_message=row.error_message,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
-
-    # ---------- 组装辅助 ----------
-
-    @staticmethod
-    def _objective(
-        runtime: PlanRuntime, objective_id: str | None,
-    ) -> PlanRuntimeObjective | None:
-        if objective_id is None:
-            return None
-        for item in runtime.objectives:
-            if item.id == objective_id:
-                return item
-        return None
-
-    @staticmethod
-    def _base_remaining(objective: PlanRuntimeObjective, state: ObjectiveProgress) -> int:
-        if objective.source == "question_bank":
-            return max(0, len(objective.question_ids) - state.cursor)
-        return max(0, PROJECT_BASE_QUESTIONS - (state.asked - state.followups))
-
-    def _bank_order(
-        self, plan_id: str, session_id: str,
-        runtime: PlanRuntime, objective: PlanRuntimeObjective,
-    ) -> list[SnapshotQuestion]:
-        """题库取题顺序：同场次固定（cursor 依赖它）、场次间不同、历史问过的靠后。"""
-        cached = self._bank_orders.get((session_id, objective.id))
-        if cached is not None:
-            return cached
-        index = {str(item.id): item for item in runtime.materials.questions}
-        items = [
-            index[str(item)] for item in objective.question_ids if str(item) in index
-        ]
-        ordered = variety.shuffled(
-            items, seed=variety.session_seed(session_id), key=lambda item: str(item.id),
-        )
-        ordered = variety.prefer_unseen(
-            ordered,
-            usage=self._usage.get((plan_id, session_id), {}),
-            key=lambda item: str(item.id),
-        )
-        self._bank_orders[(session_id, objective.id)] = ordered
-        return ordered
-
-    async def _question_usage(self, plan_id: str, session_id: str) -> dict[str, int]:
-        """同计划其他场次每题被问过几次；用于把没问过的题排到前面。"""
-        cached = self._usage.get((plan_id, session_id))
-        if cached is not None:
-            return cached
-        rows = await self.session.execute(
-            select(InterviewTurn.question_id, func.count())
-            .join(InterviewSession, InterviewTurn.session_id == InterviewSession.id)
-            .where(
-                InterviewSession.plan_id == plan_id,
-                InterviewSession.id != session_id,
-                InterviewTurn.role == "interviewer",
-                InterviewTurn.question_id.is_not(None),
-            )
-            .group_by(InterviewTurn.question_id)
-        )
-        usage = {str(qid): int(count) for qid, count in rows if qid is not None}
-        self._usage[(plan_id, session_id)] = usage
-        return usage
-
-    async def _avoid_questions(self, plan_id: str, session_id: str) -> list[str]:
-        """同计划历史场次最近问过的问题，作为模型「别重复」的参考。"""
-        cached = self._avoid.get(session_id)
-        if cached is not None:
-            return cached
-        rows = await self.session.execute(
-            select(InterviewTurn.text)
-            .join(InterviewSession, InterviewTurn.session_id == InterviewSession.id)
-            .where(
-                InterviewSession.plan_id == plan_id,
-                InterviewSession.id != session_id,
-                InterviewTurn.role == "interviewer",
-            )
-            .order_by(InterviewTurn.created_at.desc(), InterviewTurn.sequence.desc())
-            .limit(6)
-        )
-        seen: list[str] = []
-        for text in rows.scalars():
-            snippet = plain_text(text or "")[:120]
-            if snippet and snippet not in seen:
-                seen.append(snippet)
-        self._avoid[session_id] = seen
-        return seen
-
-    @staticmethod
-    def _pick_bank(
-        order: list[SnapshotQuestion], cursor: int,
-    ) -> SnapshotQuestion | None:
-        return order[cursor] if 0 <= cursor < len(order) else None
-
-    @staticmethod
-    def _objective_facts(
-        runtime: PlanRuntime, objective: PlanRuntimeObjective, *, seed: int = 0,
-    ) -> list[tuple[str, str, str]]:
-        wanted = {str(item) for item in objective.project_fact_ids}
-        result: list[tuple[str, str, str]] = []
-        for project in runtime.materials.projects:
-            for fact in project.facts:
-                if str(fact.id) in wanted:
-                    result.append((project.name, fact.fact_type, fact.content))
-        if seed:
-            # 事实顺序也按场次打乱，避免每次从同一条经历问起。
-            result = variety.shuffled(
-                result, seed=seed,
-                key=lambda item: "\x1f".join(item),
-            )
-        return result
-
-    def _project_question(
-        self, runtime: PlanRuntime, objective: PlanRuntimeObjective,
-        state: ObjectiveProgress, *, seed: int = 0,
-    ) -> str:
-        facts = self._objective_facts(runtime, objective, seed=seed)
-        if not facts:
-            return rules.objective_question(objective.topic)
-        index = (state.asked - state.followups) % len(facts)
-        project_name, fact_type, content = facts[index]
-        return rules.project_question(project_name, fact_type, content)
-
-    def _next_pending(
-        self, runtime: PlanRuntime, progress: SessionProgress,
-        *, session_id: str, preferred: str = "",
-    ) -> tuple[PlanRuntimeObjective, ObjectiveProgress] | None:
-        if preferred:
-            objective = self._objective(runtime, preferred)
-            if objective is not None:
-                state = progress.state(objective.id)
-                if state.status in {"pending", "active"}:
-                    return objective, state
-        for objective in self._objective_order(runtime, session_id=session_id):
-            state = progress.state(objective.id)
-            if state.status in {"pending", "active"}:
-                return objective, state
-        return None
-
-    def _objective_order(
-        self, runtime: PlanRuntime, *, session_id: str,
-    ) -> list[PlanRuntimeObjective]:
-        """优先级分层不变、同层按场次打乱：每场从不同的目标切入。"""
-        cached = self._objective_orders.get(session_id)
-        if cached is None:
-            cached = variety.grouped_by_priority(
-                runtime.objectives,
-                seed=variety.session_seed(session_id),
-                key=lambda item: item.id,
-                priority=lambda item: item.priority,
-            )
-            self._objective_orders[session_id] = cached
-        return cached
-
-    async def _next_turn(
-        self,
-        runtime: PlanRuntime,
-        progress: SessionProgress,
-        *,
-        outline: SessionOutline,
-        plan_id: str,
-        session_id: str,
-        preferred: str = "",
-        fallback_text: str = "",
-    ) -> tuple[NextTurn, ObjectiveProgress] | None:
-        """先试模型建议的目标，再按场次顺序推进；模型刚说的话优先于骨架。"""
-        chosen = self._next_pending(
-            runtime, progress, session_id=session_id, preferred=preferred,
-        )
-        first = True
-        while chosen is not None:
-            objective, state = chosen
-            if objective.source == "question_bank":
-                snapshot = self._pick_bank(
-                    self._bank_order(plan_id, session_id, runtime, objective), state.cursor,
-                )
-                if snapshot is None:
-                    state.status = "skipped"
-                    chosen = self._next_pending(runtime, progress, session_id=session_id)
-                    first = False
-                    continue
-                return NextTurn(
-                    objective_id=objective.id, source="question_bank",
-                    text=plain_text(snapshot.question_text)[:400],
-                    question_id=str(snapshot.id), activate=True, advance_cursor=True,
-                ), state
-            # 模型本轮已经说出口的话必须原样落库，否则用户会看到文字被替换。
-            text = fallback_text if first and (not preferred or preferred == objective.id) else ""
-            if not text:
-                text = self._outline_question(outline, objective, state)
-            if not text:
-                text = self._project_question(
-                    runtime, objective, state, seed=variety.session_seed(session_id),
-                )
-            return NextTurn(
-                objective_id=objective.id, source="project", text=text, activate=True,
-            ), state
-        return None
 
     @staticmethod
     def _finish(row: InterviewSession, progress: SessionProgress, reason: str) -> None:
@@ -1807,3 +1155,105 @@ class InterviewService:
                 await self.session.flush()
         except StaleDataError:
             raise conflict() from None
+
+    # ---------- 组合对象薄委托：实现见 questioning.py / reporting.py ----------
+
+    async def get_report(self, session_id: str) -> ReportRead | None:
+        return await self.reports.get_report(session_id)
+
+    async def report(
+        self, session_id: str, payload: ReportCreate,
+    ) -> tuple[ReportRead, bool]:
+        return await self.reports.report(session_id, payload)
+
+    async def _ensure_outline(
+        self, session_id: str, *,
+        objectives: list[PlanRuntimeObjective] | None = None,
+        limit: int | None = None,
+    ) -> None:
+        return await self.questions._ensure_outline(
+            session_id, objectives=objectives, limit=limit,
+        )
+
+    async def _build_outline(
+        self, session_id: str, runtime: PlanRuntime, mode: str,
+        targets: list[PlanRuntimeObjective],
+    ) -> SessionOutline:
+        return await self.questions._build_outline(session_id, runtime, mode, targets)
+
+    def _rule_outline(
+        self, session_id: str, runtime: PlanRuntime,
+        targets: list[PlanRuntimeObjective],
+    ) -> SessionOutline:
+        return self.questions._rule_outline(session_id, runtime, targets)
+
+    def _outline_question(
+        self, outline: SessionOutline, objective: PlanRuntimeObjective,
+        state: ObjectiveProgress,
+    ) -> str:
+        return self.questions._outline_question(outline, objective, state)
+
+    @staticmethod
+    def _objective(
+        runtime: PlanRuntime, objective_id: str | None,
+    ) -> PlanRuntimeObjective | None:
+        return QuestioningService._objective(runtime, objective_id)
+
+    @staticmethod
+    def _base_remaining(
+        objective: PlanRuntimeObjective, state: ObjectiveProgress,
+    ) -> int:
+        return QuestioningService._base_remaining(objective, state)
+
+    def _bank_order(
+        self, plan_id: str, session_id: str,
+        runtime: PlanRuntime, objective: PlanRuntimeObjective,
+    ) -> list[SnapshotQuestion]:
+        return self.questions._bank_order(plan_id, session_id, runtime, objective)
+
+    async def _question_usage(self, plan_id: str, session_id: str) -> dict[str, int]:
+        return await self.questions._question_usage(plan_id, session_id)
+
+    async def _avoid_questions(self, plan_id: str, session_id: str) -> list[str]:
+        return await self.questions._avoid_questions(plan_id, session_id)
+
+    @staticmethod
+    def _pick_bank(
+        order: list[SnapshotQuestion], cursor: int,
+    ) -> SnapshotQuestion | None:
+        return QuestioningService._pick_bank(order, cursor)
+
+    @staticmethod
+    def _objective_facts(
+        runtime: PlanRuntime, objective: PlanRuntimeObjective, *, seed: int = 0,
+    ) -> list[tuple[str, str, str]]:
+        return QuestioningService._objective_facts(runtime, objective, seed=seed)
+
+    def _project_question(
+        self, runtime: PlanRuntime, objective: PlanRuntimeObjective,
+        state: ObjectiveProgress, *, seed: int = 0,
+    ) -> str:
+        return self.questions._project_question(runtime, objective, state, seed=seed)
+
+    def _next_pending(
+        self, runtime: PlanRuntime, progress: SessionProgress,
+        *, session_id: str, preferred: str = "",
+    ) -> tuple[PlanRuntimeObjective, ObjectiveProgress] | None:
+        return self.questions._next_pending(
+            runtime, progress, session_id=session_id, preferred=preferred,
+        )
+
+    def _objective_order(
+        self, runtime: PlanRuntime, *, session_id: str,
+    ) -> list[PlanRuntimeObjective]:
+        return self.questions._objective_order(runtime, session_id=session_id)
+
+    async def _next_turn(
+        self, runtime: PlanRuntime, progress: SessionProgress, *,
+        outline: SessionOutline, plan_id: str, session_id: str,
+        preferred: str = "", fallback_text: str = "",
+    ) -> tuple[NextTurn, ObjectiveProgress] | None:
+        return await self.questions._next_turn(
+            runtime, progress, outline=outline, plan_id=plan_id,
+            session_id=session_id, preferred=preferred, fallback_text=fallback_text,
+        )

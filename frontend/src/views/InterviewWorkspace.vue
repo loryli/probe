@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useInterview } from '../composables/useInterview'
 import type { InterviewTurn } from '../types'
@@ -8,8 +8,32 @@ const route = useRoute()
 const interview = useInterview()
 const historyOpen = ref(true)
 const reviewOpen = ref(false)
+const recordDialog = ref(false)
+const recordDialogEl = ref<HTMLDialogElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
 const planChoice = ref<HTMLSelectElement | null>(null)
+
+// 必须用 showModal 让对话框进入 top layer：仅设 open 属性时，主舞台的大标题
+// 会按层叠顺序盖在对话框上，且 ::backdrop 不生效，文字互相压叠。
+watch(recordDialog, (open) => {
+  const node = recordDialogEl.value
+  if (!node) return
+  if (open && !node.open) node.showModal()
+  else if (!open && node.open) node.close()
+})
+function onRecordDialogClose() {
+  if (interview.deleteBusy.value) return
+  recordDialog.value = false
+  interview.checkedSessionIds.value = []
+}
+function onRecordDialogCancel(event: Event) {
+  if (interview.deleteBusy.value) event.preventDefault()
+}
+
+const selectableSessions = computed(() => interview.sessions.value.filter((item) => item.status !== 'active'))
+const allSelectableChecked = computed(() => selectableSessions.value.length > 0
+  && selectableSessions.value.every((item) => interview.checkedSessionIds.value.includes(item.id)))
+const sessionStatusText = (status: string) => ({ active: '进行中', paused: '已暂停', completed: '已结束' } as Record<string, string>)[status] ?? status
 
 const completedObjectives = computed(() => interview.session.value?.objectives.filter(
   (objective) => objective.status === 'covered' || objective.status === 'skipped',
@@ -42,6 +66,31 @@ async function submit() {
   scrollTranscript()
 }
 function toggleHistory() { historyOpen.value = !historyOpen.value }
+function openRecordDialog() {
+  interview.checkedSessionIds.value = []
+  interview.error.value = ''
+  recordDialog.value = true
+}
+function closeRecordDialog() {
+  if (interview.deleteBusy.value) return
+  recordDialog.value = false
+  interview.checkedSessionIds.value = []
+}
+function onSessionCheck(id: string, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  const next = new Set(interview.checkedSessionIds.value)
+  if (checked) next.add(id)
+  else next.delete(id)
+  interview.checkedSessionIds.value = [...next]
+}
+function onAllSessionCheck(event: Event) {
+  interview.checkedSessionIds.value = (event.target as HTMLInputElement).checked
+    ? selectableSessions.value.map((item) => item.id)
+    : []
+}
+async function confirmDeleteSessions() {
+  if (await interview.deleteSessions()) recordDialog.value = false
+}
 function keySubmit(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault()
@@ -121,7 +170,7 @@ onMounted(() => {
           </div>
         </section>
 
-        <div class="rail-bottom"><span class="keyboard-hint">⌘ / Ctrl <kbd>↵</kbd> 提交回答</span><button class="new-session-link" type="button" @click="interview.newSession()">＋ 新练习</button></div>
+        <div class="rail-bottom"><span class="keyboard-hint">⌘ / Ctrl <kbd>↵</kbd> 提交回答</span><div class="rail-bottom-actions"><button class="record-manage-link" type="button" @click="openRecordDialog()">记录管理</button><button class="new-session-link" type="button" @click="interview.newSession()">＋ 新练习</button></div></div>
       </aside>
 
       <section class="main-stage" :class="{ 'has-session': interview.session.value }">
@@ -195,4 +244,21 @@ onMounted(() => {
     <div v-if="interview.error.value" class="toast toast-error" role="alert"><span class="toast-mark">!</span><span>{{ interview.error.value }}</span><button type="button" aria-label="关闭提示" @click="interview.error.value = ''">×</button></div>
     <div v-else-if="interview.notice.value" class="toast" role="status"><span class="toast-mark">✓</span><span>{{ interview.notice.value }}</span><button type="button" aria-label="关闭提示" @click="interview.notice.value = ''">×</button></div>
   </main>
+
+  <dialog ref="recordDialogEl" class="record-dialog" aria-labelledby="record-dialog-title" @click.self="closeRecordDialog()" @close="onRecordDialogClose()" @cancel="onRecordDialogCancel($event)">
+    <div class="record-dialog-inner">
+      <header class="record-dialog-head"><div><p class="eyebrow">PRACTICE RECORDS</p><h2 id="record-dialog-title">批量删除练习记录</h2></div><button class="record-dialog-close" type="button" aria-label="关闭记录管理" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">×</button></header>
+      <p class="record-dialog-note">删除会连同全部问答、目标进度与整场复盘一起物理移除，不可恢复；已确认的面试计划不受影响。进行中的场次需先结束或暂停。这里列出最近 {{ interview.sessions.value.length }} 场记录。</p>
+      <div class="record-dialog-tools"><label><input type="checkbox" :checked="allSelectableChecked" :disabled="!selectableSessions.length || interview.deleteBusy.value" @change="onAllSessionCheck($event)" /> 全选可删记录</label><span>已选 {{ interview.checkedSessionIds.value.length }}</span></div>
+      <div v-if="interview.sessions.value.length" class="record-dialog-list">
+        <label v-for="item in interview.sessions.value" :key="item.id" class="record-dialog-row" :class="{ 'row-locked': item.status === 'active' }">
+          <input type="checkbox" :checked="interview.checkedSessionIds.value.includes(item.id)" :disabled="item.status === 'active' || interview.deleteBusy.value" :aria-label="`选择记录：${item.direction || '模拟面试'}`" @change="onSessionCheck(item.id, $event)" />
+          <span class="record-dialog-copy"><strong>{{ item.direction || '模拟面试' }}</strong><small>{{ formatDate(item.created_at) }} · {{ item.answer_count }} 个回答 · {{ sessionStatusText(item.status) }}</small></span>
+          <em v-if="item.status === 'active'">进行中</em>
+        </label>
+      </div>
+      <p v-else class="record-dialog-empty">还没有面试记录。</p>
+      <footer class="record-dialog-foot"><button class="button button-quiet" type="button" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">取消</button><button class="record-delete-button" type="button" :disabled="!interview.checkedSessionIds.value.length || interview.deleteBusy.value" @click="confirmDeleteSessions()">{{ interview.deleteBusy.value ? '正在删除…' : '删除所选记录' }}</button></footer>
+    </div>
+  </dialog>
 </template>
