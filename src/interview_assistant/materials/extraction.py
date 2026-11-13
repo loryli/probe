@@ -43,6 +43,9 @@ def with_quality_warnings(output: ResumeParseOutput) -> ResumeParseOutput:
     result = output.model_copy(deep=True)
     for project in result.projects:
         notes = _source_warnings(project.evidence_quote)
+        # 空字段不证明原文缺失，也可能是未提取；不推断缺失原因或补写技术栈。
+        if not project.tech_stack:
+            notes.append("本候选技术栈为空，可对照原文核对；未明确列出的内容允许留空，也可手动补充。")
         for fact in project.facts:
             suspicious = _source_warnings(fact.evidence_quote)
             fact.needs_confirmation = list(dict.fromkeys([*suspicious, *fact.needs_confirmation]))[:20]
@@ -72,7 +75,19 @@ def resolve_references(output: ReferencedResumeOutput, source: str) -> ResumePar
         facts = []
         notes = list(candidate.needs_confirmation)
         seen: set[tuple[int, int]] = set()
+        # 项目的 start/end 只引用标题，不是完整项目正文；以后一项目标题或履历分区作为边界。
+        next_start = min((
+            item.start_line for item in output.projects
+            if candidate.end_line < item.start_line <= item.end_line <= len(lines)
+        ), default=len(lines) + 1)
+        for line_number in range(candidate.end_line + 1, next_start):
+            if _heading(lines[line_number - 1]) in _END_SECTION:
+                next_start = line_number
+                break
         for fact in candidate.facts:
+            if not candidate.start_line <= fact.start_line <= fact.end_line < next_start:
+                notes.append("有事实引用超出本项目的原文范围，已排除；请核对项目边界后手动补充。")
+                continue
             quote = _quote(lines, fact.start_line, fact.end_line, 10000)
             if quote is None or not fact.fact_type.strip():
                 notes.append("有事实原文范围无效或过长，已排除；请对照原文补充。")

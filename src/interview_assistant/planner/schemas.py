@@ -31,7 +31,9 @@ class PlanInputs(InputModel):
     direction: str = Field(default="", max_length=500)
     project_ratio: float = Field(default=0.5, ge=0, le=1)
     duration_minutes: int = Field(default=45, ge=10, le=180)
-    max_total_followups: int = Field(default=0, ge=0, le=30)
+    max_total_followups: int | None = Field(
+        default=None, ge=0, le=30, description="null 自动分配；0 禁止额外追问；正整数为全场上限",
+    )
 
     @field_validator("project_ids", "question_ids")
     @classmethod

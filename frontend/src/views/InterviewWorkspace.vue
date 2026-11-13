@@ -56,6 +56,22 @@ const remainingLabel = computed(() => {
 const currentObjective = computed(() => interview.session.value?.objectives.find(
   (item) => item.id === interview.currentQuestion.value?.objective_id,
 ))
+const openingStage = computed(() => interview.session.value?.phase === 'self_introduction'
+  || interview.session.value?.phase === 'project_introduction')
+const stageTitle = computed(() => interview.session.value?.phase === 'self_introduction' ? '自我介绍'
+  : interview.session.value?.phase === 'project_introduction' ? '项目介绍' : currentObjective.value?.topic || '当前练习')
+const answerPlaceholder = computed(() => interview.session.value?.phase === 'self_introduction'
+  ? '介绍你的背景、主要经历和应聘方向…'
+  : interview.session.value?.phase === 'project_introduction'
+    ? '介绍项目背景、整体方案，以及你本人负责的工作…'
+    : '从结论开始，再讲清楚你的依据、选择和结果…')
+const objectiveBudgetLabel = computed(() => {
+  const objective = currentObjective.value
+  if (!objective) return ''
+  const delta = interview.session.value?.status === 'active' ? Math.max(0, Math.floor((now.value - observedAt.value) / 1000)) : 0
+  const elapsed = objective.elapsed_sec + delta
+  return `本目标已用 ${Math.floor(elapsed / 60)}分${elapsed % 60}秒 / 参考 ${Math.floor(objective.time_budget_sec / 60)}分${objective.time_budget_sec % 60}秒 · 暂停不计时`
+})
 function objectiveFor(turn: InterviewTurn) {
   return interview.session.value?.objectives.find((objective) => objective.id === turn.objective_id)
 }
@@ -154,7 +170,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
             </button>
           </div>
           <div v-else-if="interview.pageBusy.value" class="empty-inline"><span class="spinner"></span>正在读取可用计划</div>
-          <div v-else class="empty-inline">先选择练习方式。<RouterLink to="/planner">只练题库（无需简历）或创建项目面试计划 →</RouterLink></div>
+          <div v-else class="empty-inline">还没有可用的已确认计划。<RouterLink to="/planner">前往面试计划 →</RouterLink></div>
         </section>
 
         <section v-else class="progress-section">
@@ -168,7 +184,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
           <ol class="objective-list">
             <li v-for="(objective, index) in interview.session.value.objectives" :key="objective.id" :class="[`objective-${objective.status}`, { 'objective-current': objective.id === interview.currentQuestion.value?.objective_id }]">
               <span class="objective-index">{{ objective.status === 'covered' ? '✓' : String(index + 1).padStart(2, '0') }}</span>
-              <span class="objective-copy"><strong>{{ objective.topic }}</strong><small>{{ objective.source === 'project' ? '项目经历' : '题库问题' }} · {{ statusText(objective.status) }}</small></span>
+              <span class="objective-copy"><strong>{{ objective.topic }}</strong><small>{{ objective.source === 'project' ? '项目经历' : '题库问题' }} · {{ statusText(objective.status) }}</small><small v-if="objective.id === currentObjective?.id">{{ objectiveBudgetLabel }}</small></span>
               <span v-if="objective.id === interview.currentQuestion.value?.objective_id" class="objective-marker" aria-label="当前目标"></span>
             </li>
           </ol>
@@ -190,11 +206,11 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
       <section class="main-stage" :class="{ 'has-session': interview.session.value }">
         <template v-if="interview.session.value">
           <div class="stage-topline">
-            <div><p class="eyebrow">{{ currentObjective?.source === 'project' ? 'PROJECT QUESTION' : 'QUESTION BANK' }}<span v-if="interview.currentQuestion.value?.is_followup"> / FOLLOW-UP</span></p><div class="stage-title">{{ currentObjective?.topic || '当前练习' }}</div></div>
+            <div><p class="eyebrow">{{ openingStage ? 'INTERVIEW OPENING' : currentObjective?.source === 'project' ? 'PROJECT QUESTION' : 'QUESTION BANK' }}<span v-if="interview.currentQuestion.value?.is_followup"> / FOLLOW-UP</span></p><div class="stage-title">{{ stageTitle }}</div></div>
             <div class="stage-actions">
               <button v-if="interview.session.value.status === 'active'" class="button button-quiet" type="button" :disabled="interview.isLocked.value" @click="interview.control('pause')">暂停</button>
               <button v-if="interview.session.value.status === 'paused'" class="button button-quiet" type="button" :disabled="interview.isLocked.value" @click="interview.control('resume')">继续</button>
-              <button v-if="interview.session.value.status === 'active'" class="button button-quiet" type="button" :disabled="interview.isLocked.value" @click="interview.control('skip')">跳过目标</button>
+              <button v-if="interview.session.value.status === 'active'" class="button button-quiet" type="button" :disabled="interview.isLocked.value" @click="interview.control('skip')">{{ openingStage ? '跳过本阶段' : '跳过目标' }}</button>
               <button v-if="interview.session.value.status !== 'completed'" class="button button-end" type="button" :disabled="interview.isLocked.value" @click="interview.control('end')">结束练习</button>
             </div>
           </div>
@@ -219,7 +235,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
               <div class="turn-content">
                 <div class="turn-meta"><span>{{ turn.role === 'interviewer' ? '面试官' : '你的回答' }}</span><span>第 {{ turn.sequence }} 轮</span><span v-if="turn.role === 'interviewer' && turn.is_followup" class="followup-tag">追问</span><span v-if="turn.role === 'candidate' && turn.answered" class="saved-tag">已保存</span></div>
                 <p class="turn-text">{{ turn.text }}</p>
-                <div v-if="turn.role === 'interviewer' && objectiveFor(turn)" class="turn-source">{{ objectiveFor(turn)?.source === 'project' ? '项目事实' : '个人题库' }} <span>·</span> {{ objectiveFor(turn)?.topic }}</div>
+                <div v-if="turn.stage === 'self_introduction' || turn.stage === 'project_introduction'" class="turn-source">{{ turn.stage === 'self_introduction' ? '开场 · 自我介绍' : '开场 · 项目介绍' }}</div><div v-else-if="turn.role === 'interviewer' && objectiveFor(turn)" class="turn-source">{{ objectiveFor(turn)?.source === 'project' ? '项目事实' : '个人题库' }} <span>·</span> {{ objectiveFor(turn)?.topic }}</div>
                 <div v-if="turn.role === 'candidate' && turn.decision?.observation" class="turn-observation">本轮观察：{{ turn.decision.observation }}</div>
               </div>
               <div v-if="turn.role === 'candidate'" class="turn-avatar candidate-avatar">我</div>
@@ -235,7 +251,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
           <div v-if="interview.session.value.status === 'paused'" class="paused-prompt"><strong>练习已暂停</strong><p>{{ interview.answer.value.trim() ? '当前回答草稿仍保留在本页；点击继续后可以接着编辑。' : '点击继续返回作答，也可以直接结束并生成复盘。' }}</p></div>
           <form v-if="interview.session.value.status === 'active' && interview.currentQuestion.value" class="answer-composer" @submit.prevent="submit()">
             <div class="composer-label"><label for="answer-draft">你的回答</label><span>{{ interview.answer.value.length.toLocaleString() }} / 8,000</span></div>
-            <textarea id="answer-draft" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" placeholder="从结论开始，再讲清楚你的依据、选择和结果…" @keydown="keySubmit"></textarea>
+            <textarea id="answer-draft" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
             <div class="composer-footer"><span>回答会先保存，再开始生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
           </form>
           <div v-else-if="interview.session.value.status === 'completed'" class="report-area">

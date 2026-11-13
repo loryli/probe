@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const workspaces = [
   { to: '/', label: '题库', matches: (path: string) => path === '/' || path === '/questions' },
-  { to: '/materials', label: '资料', matches: (path: string) => path === '/materials' },
+  { to: '/materials', label: '简历', matches: (path: string) => path === '/materials' },
   { to: '/planner', label: '计划', matches: (path: string) => path === '/planner' },
   { to: '/interviews', label: '练习', matches: (path: string) => path.startsWith('/interviews') },
 ]

@@ -41,6 +41,8 @@ export function useResumeExtraction(resumeId: Ref<string>, version: Ref<number>)
   let generation = 0
   let clock: number | undefined
   let backupRequest = ''
+  let historyRequest: Promise<boolean> | null = null
+  let historyLoaded = false
 
   function stopParseWatch() {
     ++generation
@@ -92,14 +94,17 @@ export function useResumeExtraction(resumeId: Ref<string>, version: Ref<number>)
     }
   }
   async function readParseDraft(draftId: string) {
-    if (!resumeId.value || parseBusy.value || parseLoading.value) return
+    if (!resumeId.value || parseBusy.value || parseLoading.value) return false
     stopParseWatch()
     const token = generation
     const id = resumeId.value
     parseBusy.value = true; parseError.value = ''; parseNotice.value = ''; parseStage.value = '正在读取原任务…'
     try {
       const draft = await apiRequest<ParseDraft>(`/materials/resumes/${id}/parse-drafts/${draftId}`)
-      if (token === generation) await observe(draft, token, id)
+      if (token === generation) {
+        await observe(draft, token, id)
+        return token === generation && ['ready', 'confirmed'].includes(parseDraft.value?.status ?? '')
+      }
     } catch (cause) {
       if (token === generation) {
         parseError.value = cause instanceof Error ? cause.message : '读取提取记录失败。'
@@ -109,31 +114,50 @@ export function useResumeExtraction(resumeId: Ref<string>, version: Ref<number>)
         }
       }
     } finally { if (token === generation) stopParseWatch() }
+    return false
   }
-  async function loadParseHistory() {
-    if (!resumeId.value || parseBusy.value || parseLoading.value) return
+  function loadParseHistory(): Promise<boolean> {
+    if (historyRequest) return historyRequest
+    if (!resumeId.value || parseBusy.value) return Promise.resolve(false)
     const token = generation
     const id = resumeId.value
+    const sourceVersion = version.value
     parseLoading.value = true
-    try {
-      const page = await apiRequest<{ items: ParseDraft[] }>(`/materials/resumes/${id}/parse-drafts?limit=20&source_version=${version.value}`)
-      if (token !== generation) return
-      parseHistory.value = page.items
-      const runningModel = page.items.find((item) => item.provider !== 'local_rules' && item.status === 'running')
-      if (runningModel) pendingRequest.value = runningModel.id
-      if (page.items[0]) applyParseDraft(page.items[0])
-      parseError.value = page.items[0]?.status === 'failed' ? page.items[0].error_message || '项目提取失败。' : ''
-    } catch (cause) {
-      if (token === generation) parseError.value = cause instanceof Error ? cause.message : '读取提取历史失败。'
-    } finally { if (token === generation) parseLoading.value = false }
+    const request = (async () => {
+      try {
+        const page = await apiRequest<{ items: ParseDraft[] }>(`/materials/resumes/${id}/parse-drafts?limit=20&source_version=${sourceVersion}`)
+        if (token !== generation) return false
+        parseHistory.value = page.items
+        if (page.items[0]) applyParseDraft(page.items[0])
+        const runningModel = page.items.find((item) => item.provider !== 'local_rules' && item.status === 'running')
+        if (runningModel) pendingRequest.value = runningModel.id
+        parseError.value = page.items[0]?.status === 'failed' ? page.items[0].error_message || '项目提取失败。' : ''
+        historyLoaded = true
+        return true
+      } catch (cause) {
+        if (token === generation) parseError.value = cause instanceof Error ? cause.message : '读取提取历史失败。'
+        return false
+      } finally { if (token === generation) parseLoading.value = false }
+    })()
+    historyRequest = request
+    void request.then(() => { if (historyRequest === request) historyRequest = null })
+    return request
   }
   async function runExtraction() {
-    if (!resumeId.value || parseBusy.value || parseLoading.value) return
-    if (parsePending.value && !submissionMissing.value) {
-      await readParseDraft(pendingRequest.value || parseDraft.value!.id)
-      return
+    if (!resumeId.value || parseBusy.value) return false
+    const source = `${resumeId.value}:${version.value}`
+    // 保存简历会触发历史读取；明确的提取动作等待它完成，不能静默丢弃点击。
+    if (parseLoading.value || !historyLoaded) {
+      if (!await loadParseHistory()) {
+        if (source === `${resumeId.value}:${version.value}`) parseNotice.value = '尚未读到提取记录，未发起模型调用；请重试读取后再提取。'
+        return false
+      }
     }
-    if (!pendingRequest.value && parseDraft.value && !window.confirm('重新提取会发起一次新的模型调用。已有候选和项目会保留，继续吗？')) return
+    if (source !== `${resumeId.value}:${version.value}` || parseBusy.value) return false
+    if (parsePending.value && !submissionMissing.value) {
+      return readParseDraft(pendingRequest.value || parseDraft.value!.id)
+    }
+    if (!pendingRequest.value && parseDraft.value && !window.confirm('重新提取会发起一次新的模型调用。已有候选和项目会保留，继续吗？')) return false
     stopParseWatch()
     const token = generation
     const id = resumeId.value
@@ -143,13 +167,17 @@ export function useResumeExtraction(resumeId: Ref<string>, version: Ref<number>)
     parseBusy.value = true; parseError.value = ''; parseNotice.value = ''; parseElapsed.value = 0; parseStage.value = '正在提交提取请求…'
     try {
       const draft = await apiRequest<ParseDraft>(`/materials/resumes/${id}/parse-drafts`, postJson({ request_id: requestId, source_version: sourceVersion }), 20_000)
-      if (token === generation) await observe(draft, token, id)
+      if (token === generation) {
+        await observe(draft, token, id)
+        return token === generation && ['ready', 'confirmed'].includes(parseDraft.value?.status ?? '')
+      }
     } catch (cause) {
-      if (token !== generation) return
+      if (token !== generation) return false
       if (cause instanceof RequestError && ((cause.status >= 400 && cause.status < 500) || cause.code === 'model_not_configured')) pendingRequest.value = ''
       parseError.value = cause instanceof Error ? cause.message : '项目提取失败。'
       parseNotice.value = pendingRequest.value ? '提交结果尚未确认。请读取原任务，不要重复提取。' : ''
     } finally { if (token === generation) stopParseWatch() }
+    return false
   }
   async function runLocalExtraction() {
     if (!resumeId.value || parseLoading.value || backupBusy.value) return
@@ -176,6 +204,7 @@ export function useResumeExtraction(resumeId: Ref<string>, version: Ref<number>)
     parseDraft.value = null; parseHistory.value = []; pendingRequest.value = ''
     submissionMissing.value = false
     backupRequest = ''
+    historyRequest = null; historyLoaded = false
     parseLoading.value = false; parseError.value = ''; parseNotice.value = ''; parseElapsed.value = 0
     if (resumeId.value) void loadParseHistory()
   }, { immediate: true, flush: 'sync' })

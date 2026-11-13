@@ -121,8 +121,7 @@ class ReportService:
             runtime = PlanRuntime.model_validate(row.runtime_json)
             progress = SessionProgress.model_validate(row.progress_json)
             turns = await self.owner.turns(session_id)
-            ended = row.ended_at or utc_now()
-            elapsed_sec = max(0, int((ended - row.started_at).total_seconds()))
+            elapsed_sec = self.owner.elapsed(row, progress)
             rounds = self._report_rounds(turns)
             stats = self._report_stats(progress, turns, elapsed_sec)
             mode = row.mode
@@ -184,7 +183,7 @@ class ReportService:
             return None, ModelError(
                 "model_invalid_output", "模型结果未通过校验，复盘未保存",
             )
-        return self._sanitize_report(draft, runtime), None
+        return self._sanitize_report(draft, runtime, rounds), None
 
     def _rule_report(
         self, runtime: PlanRuntime, progress: SessionProgress, turns: list[InterviewTurn],
@@ -231,13 +230,19 @@ class ReportService:
 
     def _sanitize_report(
         self, draft: ReportDraft, runtime: PlanRuntime,
+        rounds: list[dict[str, object]] | None = None,
     ) -> ReportContent:
         """只保留已知目标；模型漏掉或编造的目标 ID 不进入报告。"""
         known = {item.id for item in runtime.objectives}
         order = {item.id: index for index, item in enumerate(runtime.objectives)}
         evaluations = [
-            item for item in draft.evaluations if item.objective_id in known
+            item.model_copy(deep=True) for item in draft.evaluations if item.objective_id in known
         ]
+        if rounds is not None:
+            for evaluation in evaluations:
+                valid = {item["sequence"] for item in rounds
+                         if item.get("objective_id") == evaluation.objective_id}
+                evaluation.turn_sequences = [value for value in evaluation.turn_sequences if value in valid]
         evaluations.sort(key=lambda item: order.get(item.objective_id, 0))
         return ReportContent(
             overall=draft.overall,

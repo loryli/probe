@@ -1,5 +1,6 @@
 export type SessionStatus = 'active' | 'paused' | 'completed'
 export type TurnRole = 'interviewer' | 'candidate'
+export type InterviewStage = 'self_introduction' | 'project_introduction' | 'technical'
 
 export interface TurnDecision {
   objective_status: 'covered' | 'partial' | 'insufficient'
@@ -10,6 +11,7 @@ export interface TurnDecision {
 }
 
 export interface InterviewTurn {
+  stage: InterviewStage
   id: string
   sequence: number
   role: TurnRole
@@ -34,9 +36,11 @@ export interface ObjectiveState {
   followups: number
   max_followups: number
   time_budget_sec: number
+  elapsed_sec: number
 }
 
 export interface InterviewSession {
+  phase: InterviewStage
   practice_mode: 'question_bank' | 'resume'
   id: string
   plan_id: string

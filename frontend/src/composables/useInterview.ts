@@ -267,6 +267,9 @@ export function useInterview() {
   async function control(action: 'pause' | 'resume' | 'skip' | 'end') {
     if (!session.value || session.value.id !== sessionId.value || isLocked.value) return
     const labels = { pause: '暂停本场？', resume: '继续本场？', skip: '跳过当前考察目标并生成下一步？', end: '结束本场？已保存的问答会保留。' }
+    if (session.value.phase === 'self_introduction' || session.value.phase === 'project_introduction') {
+      labels.skip = '跳过当前介绍环节并进入下一阶段？未提交的介绍不会保存。'
+    }
     if (['skip', 'end'].includes(action) && !window.confirm(labels[action])) return
     const active = session.value
     const token = ++mutationGeneration
@@ -277,7 +280,7 @@ export function useInterview() {
       if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
       applySession(next)
       liveText.value = ''
-      if (action === 'resume' && !session.value.current_turn && session.value.status === 'active' && !session.value.error_code) {
+      if (action === 'resume' && !session.value.current_turn && session.value.pending_turn_id && session.value.status === 'active' && !session.value.error_code) {
         phase.value = 'streaming'
         attachEvents(active.id)
       } else phase.value = 'idle'

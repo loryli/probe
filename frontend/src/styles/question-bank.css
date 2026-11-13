@@ -124,9 +124,15 @@
 :where(.bank-page) .question-row-wrap { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #edf0eb; }
 :where(.bank-page) .question-row-wrap > input { margin: 0 1px 0 4px; accent-color: #829a4c; }
 :where(.bank-page) .question-row { border-bottom: 0; }
-:where(.bank-page) .bulk-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 7px 0; color: #7b8677; font-size: 10px; }
+:where(.bank-page) .bulk-tools { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #f8faf5; color: #586652; font-size: 12px; }
 :where(.bank-page) .bulk-tools select { min-width: 90px; max-width: 130px; padding: 4px; border: 1px solid #e0e5dc; border-radius: 4px; font-size: 10px; }
-:where(.bank-page) .bulk-tools button { padding: 4px 5px; border: 1px solid #e4e9e0; border-radius: 4px; background: white; color: #6c7963; font-size: 10px; cursor: pointer; }
+:where(.bank-page) .bulk-tools button { min-height: 32px; padding: 6px 9px; border: 1px solid #dbe2d4; border-radius: 4px; background: white; color: #56674b; font-size: 12px; cursor: pointer; }
+:where(.bank-page) .bulk-tools button.danger-action { color: #a14f3d; border-color: #e8d5ce; }
+:where(.bank-page) .bulk-tools button:disabled { opacity: .5; cursor: not-allowed; }
+:where(.bank-page) .bulk-tools legend { padding: 0 5px; font-weight: 600; }
+:where(.bank-page) .bulk-tools .page-selection, :where(.bank-page) .bulk-category { display: inline-flex; align-items: center; gap: 7px; }
+:where(.bank-page) .bulk-tools small { flex-basis: 100%; color: #7b8677; line-height: 1.6; }
+:where(.bank-page) .bulk-progress { color: #586652; font-size: 13px; }
 :where(.bank-page) .category-manage-list { display: grid; gap: 5px; margin-top: 15px; padding-top: 12px; border-top: 1px solid #e8ece5; }
 :where(.bank-page) .category-manage-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 5px; align-items: center; color: #737d70; font-size: 11px; }
 :where(.bank-page) .category-manage-list button { border: 0; background: transparent; color: #728454; font-size: 10px; cursor: pointer; }

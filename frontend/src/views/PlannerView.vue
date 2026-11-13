@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { apiRequest, postJson } from '../api/common'
 
 interface PlanOptions { resumes: Array<{ id: string; name: string; content_version: number; is_active: boolean }>; versions: Array<{ version: number; name: string; content_sha256: string; created_at: string }>; projects: Array<{ id: string; name: string; source_version: number; tech_stack: string[]; fact_count: number }>; questions: Array<{ id: string; question_text: string; content_version: number }>; question_total: number; selected_resume_id: string | null; selected_version: number | null; model: Record<string, unknown>; limits: Record<string, number> }
-interface Plan { id: string; resume_id: string | null; source_version: number | null; status: string; revision: number; provider: string; schema_version: string; inputs: { mode: 'model' | 'rule'; resume_id: string | null; source_version: number | null; project_ids: string[]; question_ids: string[]; direction: string; project_ratio: number; duration_minutes: number; max_total_followups: number }; snapshot: { resume_name: string; projects: Array<{ id: string; name: string; facts: Array<{ id: string; fact_type: string; content: string; evidence_quote: string | null }> }>; questions: Array<{ id: string; question_text: string }> } | null; result: { schema_version: string; session_summary: string; objectives: Array<{ id: string; topic: string; source_preference: string; priority: string; observable_evidence: string[]; project_fact_ids: string[]; question_ids: string[]; time_budget_sec: number; max_followups: number; completion_rule: string }>; source_time_budget_sec: Record<string, number>; opening_buffer_sec: number; closing_buffer_sec: number; duration_target_sec: number; constraints: { max_total_followups: number; duration_is_soft: boolean }; limitations: string[]; notes: { system: string[]; model: string[]; policy: string[] }; coverage: { facts_used: number; facts_total: number; questions_used: number; questions_total: number; projects_used: number; projects_total: number } | null } | null; error_code: string | null; error_message: string | null; elapsed_ms: number | null; created_at: string; confirmed_at: string | null }
+interface Plan { id: string; resume_id: string | null; source_version: number | null; status: string; revision: number; provider: string; schema_version: string; inputs: { mode: 'model' | 'rule'; resume_id: string | null; source_version: number | null; project_ids: string[]; question_ids: string[]; direction: string; project_ratio: number; duration_minutes: number; max_total_followups: number | null }; snapshot: { resume_name: string; projects: Array<{ id: string; name: string; facts: Array<{ id: string; fact_type: string; content: string; evidence_quote: string | null }> }>; questions: Array<{ id: string; question_text: string }> } | null; result: { schema_version: string; session_summary: string; objectives: Array<{ id: string; topic: string; source_preference: string; priority: string; observable_evidence: string[]; project_fact_ids: string[]; question_ids: string[]; time_budget_sec: number; max_followups: number; completion_rule: string }>; source_time_budget_sec: Record<string, number>; opening_buffer_sec: number; closing_buffer_sec: number; duration_target_sec: number; constraints: { max_total_followups: number; duration_is_soft: boolean }; limitations: string[]; notes: { system: string[]; model: string[]; policy: string[] }; coverage: { facts_used: number; facts_total: number; questions_used: number; questions_total: number; projects_used: number; projects_total: number } | null } | null; error_code: string | null; error_message: string | null; elapsed_ms: number | null; created_at: string; confirmed_at: string | null }
 interface PlanSummary { id: string; status: string; resume_id: string | null; source_version: number | null; direction: string; duration_minutes: number; objective_count: number; created_at: string; confirmed_at: string | null }
 
 const options = ref<PlanOptions | null>(null)
@@ -17,8 +17,10 @@ const selectedVersion = ref(1)
 const selectedProjects = ref<string[]>([])
 const selectedQuestions = ref<string[]>([])
 const config = ref({ mode: 'model' as 'model' | 'rule', direction: '', duration_minutes: 45, project_ratio: 0.5, max_total_followups: 6 })
+const followupMode = ref<'auto' | 'disabled' | 'limited'>('auto')
 const loading = ref(false)
 const generating = ref(false)
+const deletingPlanId = ref('')
 const error = ref('')
 const notice = ref('')
 const step = ref(1)
@@ -33,6 +35,7 @@ const pendingPlanRequest = ref<{ signature: string; id: string } | null>(null)
 let syncingOptions = false
 
 onBeforeRouteLeave(() => {
+  if (deletingPlanId.value) return false
   if (dirty.value && !window.confirm('计划配置尚未生成，离开后会丢弃本页草稿。继续吗？')) return false
 })
 
@@ -118,13 +121,15 @@ async function generate() {
   if (practiceMode.value === 'resume' && config.value.mode === 'model' && !modelReady.value) { error.value = '请先配置模型，或选择规则规划。'; return }
   if (practiceMode.value === 'resume' && !selectedResume.value) { error.value = '请选择简历，或切换纯题库练习。'; return }
   if ((practiceMode.value === 'question_bank' || !selectedProjects.value.length) && !selectedQuestions.value.length) { error.value = '至少选择一道题目，或选择带描述的已核对项目。'; return }
+  if (practiceMode.value === 'resume' && followupMode.value === 'limited' && (!Number.isInteger(config.value.max_total_followups) || config.value.max_total_followups < 1 || config.value.max_total_followups > 30)) { error.value = '指定的追问上限须为 1–30 的整数；不追问请选择禁止额外追问。'; return }
   generating.value = true; error.value = ''; notice.value = '正在生成训练目标与时间预算…'
   const inputs = {
     mode: practiceMode.value === 'question_bank' ? 'rule' : config.value.mode, resume_id: practiceMode.value === 'resume' ? selectedResume.value : null,
     source_version: practiceMode.value === 'resume' ? selectedVersion.value : null, project_ids: practiceMode.value === 'resume' ? [...selectedProjects.value] : [],
     question_ids: [...selectedQuestions.value], direction: config.value.direction,
     duration_minutes: config.value.duration_minutes, project_ratio: practiceMode.value === 'resume' ? config.value.project_ratio : 0,
-    max_total_followups: practiceMode.value === 'resume' ? config.value.max_total_followups : 0,
+    max_total_followups: practiceMode.value === 'question_bank' || followupMode.value === 'disabled' ? 0
+      : followupMode.value === 'auto' ? null : config.value.max_total_followups,
   }
   const signature = JSON.stringify(inputs)
   let requestId = pendingPlanRequest.value?.signature === signature ? pendingPlanRequest.value.id : ''
@@ -143,7 +148,7 @@ async function generate() {
   finally { generating.value = false }
 }
 async function readPlan(id: string) {
-  if (generating.value || loading.value) return
+  if (generating.value || loading.value || deletingPlanId.value) return
   if (dirty.value && !window.confirm('当前配置尚未生成。离开会保留在本页，仍要读取旧计划吗？')) return
   loading.value = true; error.value = ''; plan.value = null
   try { plan.value = await apiRequest<Plan>(`/interview-plans/${id}`); dirty.value = false }
@@ -158,16 +163,44 @@ async function confirmPlan() {
   catch (cause) { error.value = cause instanceof Error ? cause.message : '计划无法确认；检查资料是否已发生变化。' }
   finally { loading.value = false }
 }
-async function deletePlan() {
-  if (!plan.value || !window.confirm('逻辑删除这条计划？关联历史不会被覆盖。')) return
-  try { await apiRequest(`/interview-plans/${plan.value.id}?expected_revision=${plan.value.revision}`, { method: 'DELETE' }); plan.value = null; await loadHistory(); notice.value = '计划已从当前列表移除。' }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '删除计划失败。' }
+async function deletePlan(id = plan.value?.id) {
+  if (!id || loading.value || generating.value || deletingPlanId.value) return
+  deletingPlanId.value = id; error.value = ''; notice.value = ''
+  let deleted = false
+  try {
+    const target = await apiRequest<Plan>(`/interview-plans/${id}`)
+    if (target.status === 'running') { notice.value = '计划仍在生成，请读取结果后再删除；删除记录不会用于取消模型调用。'; return }
+    if (!window.confirm(`删除计划「${target.inputs.direction || '未命名方向'}」？将从计划列表移除，已有面试记录和冻结资料仍保留。`)) return
+    await apiRequest(`/interview-plans/${id}?expected_revision=${target.revision}`, { method: 'DELETE' })
+    deleted = true
+    if (plan.value?.id === id) plan.value = null
+    if (pendingPlanRequest.value?.id === id) pendingPlanRequest.value = null
+    if (plans.value.length === 1 && planOffset.value > 0) planOffset.value = Math.max(0, planOffset.value - 20)
+    await loadHistory()
+    notice.value = '计划已移除，已有面试记录和冻结资料保留。'
+  } catch (cause) {
+    error.value = deleted ? '计划已删除，但列表刷新失败；请重新读取列表。'
+      : cause instanceof Error ? cause.message : '删除计划失败。'
+  } finally { deletingPlanId.value = '' }
+}
+async function changeHistoryPage(nextOffset: number) {
+  if (loading.value || generating.value || deletingPlanId.value) return
+  const previous = planOffset.value
+  loading.value = true; error.value = ''; planOffset.value = nextOffset
+  try { await loadHistory() }
+  catch (cause) { planOffset.value = previous; error.value = cause instanceof Error ? cause.message : '读取计划列表失败。' }
+  finally { loading.value = false }
 }
 function startNew() { if (dirty.value && !window.confirm('当前配置尚未生成，清空并创建新计划？')) return; plan.value = null; dirty.value = false; step.value = 1; void initialize() }
 async function adjustPlan() {
   if (!plan.value) return
   const inputs = plan.value.inputs
-  config.value = { mode: inputs.mode, direction: inputs.direction, duration_minutes: inputs.duration_minutes, project_ratio: inputs.project_ratio, max_total_followups: inputs.max_total_followups }
+  // 旧计划的 0 曾表示自动额度；有已保存结果时沿用其实际额度，不误转成禁止追问。
+  const frozenLimit = plan.value.result?.constraints.max_total_followups ?? 0
+  const followupLimit = inputs.max_total_followups === 0 && frozenLimit > 0
+    ? frozenLimit : inputs.max_total_followups
+  config.value = { mode: inputs.mode, direction: inputs.direction, duration_minutes: inputs.duration_minutes, project_ratio: inputs.project_ratio, max_total_followups: followupLimit ?? 6 }
+  followupMode.value = followupLimit == null ? 'auto' : followupLimit === 0 ? 'disabled' : 'limited'
   syncingOptions = true
   try {
     practiceMode.value = inputs.resume_id ? 'resume' : 'question_bank'
@@ -180,18 +213,32 @@ async function adjustPlan() {
   } finally { syncingOptions = false }
 }
 function formatTime(seconds: number) { const m = Math.floor(seconds / 60); const s = seconds % 60; return s ? `${m}分${s}秒` : `${m}分钟` }
+async function generateRuleFallback() {
+  if (!plan.value || plan.value.status !== 'failed' || loading.value || generating.value) return
+  loading.value = true; error.value = ''
+  try {
+    await adjustPlan()
+    config.value.mode = 'rule'
+    // 这是用户明确触发的新计划；原失败记录保留，不重试原模型请求。
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '读取原配置失败，未生成备选计划。'
+    return
+  } finally { loading.value = false }
+  await generate()
+}
 onMounted(() => { void initialize() })
 </script>
 
 <template>
   <main class="work-page planner-page">
-    <div class="page-heading"><div><p class="eyebrow">DIRECTION BEFORE QUESTIONS</p><h1>面试计划</h1><p class="heading-intro">规划考察目标与预算，不生成固定题单。每次调整都会形成新的计划记录。</p></div><button class="button button-primary" @click="startNew()">＋ 新建计划</button></div>
-    <div class="planner-layout">
-      <aside class="plan-history"><div class="history-title"><p class="eyebrow">SAVED PLANS</p><span>{{ planTotal }}</span></div><button v-for="item in plans" :key="item.id" class="plan-history-item" :class="{ active: plan?.id === item.id }" @click="readPlan(item.id)"><span class="plan-state-dot" :class="`state-${item.status}`"></span><span><strong>{{ item.direction || '未命名方向' }}</strong><small>{{ item.duration_minutes }} 分钟 · {{ new Date(item.created_at).toLocaleDateString('zh-CN') }}</small></span><i>{{ item.status === 'confirmed' ? '已确认' : item.status === 'ready' ? '待确认' : item.status }}</i></button><p v-if="!plans.length" class="quiet-copy">生成后的计划会保留在这里。</p></aside>
-      <section class="planner-main">
+    <div class="page-heading"><div><p class="eyebrow">DIRECTION BEFORE QUESTIONS</p><h1>面试计划</h1><p class="heading-intro">规划考察目标与预算，不生成固定题单。每次调整都会形成新的计划记录。</p></div><button class="button button-primary" :disabled="loading || generating || !!deletingPlanId" @click="startNew()">＋ 新建计划</button></div>
+    <p v-if="deletingPlanId" class="inline-note" role="status">正在处理计划记录，请稍候…</p><div class="planner-layout">
+      <aside class="plan-history"><div class="history-title"><p class="eyebrow">SAVED PLANS</p><span>{{ planTotal }}</span></div><div v-for="item in plans" :key="item.id" class="plan-history-row"><button class="plan-history-item" :class="{ active: plan?.id === item.id }" :disabled="loading || generating || !!deletingPlanId" @click="readPlan(item.id)"><span class="plan-state-dot" :class="`state-${item.status}`"></span><span><strong>{{ item.direction || '未命名方向' }}</strong><small>{{ item.duration_minutes }} 分钟 · {{ new Date(item.created_at).toLocaleDateString('zh-CN') }}</small></span><i>{{ item.status === 'confirmed' ? '已确认' : item.status === 'ready' ? '待确认' : item.status === 'failed' ? '失败' : '生成中' }}</i></button><button class="plan-list-delete" :disabled="loading || generating || !!deletingPlanId || item.status === 'running'" :aria-label="`删除计划 ${item.direction || '未命名方向'}`" :title="item.status === 'running' ? '生成中暂不能删除，请先读取结果' : '移除计划，保留已有面试记录'" @click="deletePlan(item.id)">{{ deletingPlanId === item.id ? '删除中…' : '删除' }}</button></div><p v-if="!plans.length" class="quiet-copy">生成后的计划会保留在这里。</p><div class="plan-list-pagination"><button :disabled="loading || generating || !!deletingPlanId || planOffset === 0" @click="changeHistoryPage(Math.max(0, planOffset - 20))">上页</button><span>{{ Math.floor(planOffset / 20) + 1 }} / {{ Math.max(1, Math.ceil(planTotal / 20)) }}</span><button :disabled="loading || generating || !!deletingPlanId || planOffset + 20 >= planTotal" @click="changeHistoryPage(planOffset + 20)">下页</button></div></aside>
+      <section class="planner-main" :inert="deletingPlanId ? true : undefined">
+        <div v-if="plan" class="plan-record-actions"><span>计划记录 · {{ plan.status === 'running' ? '生成中暂不可删除' : '移除后保留已有面试记录' }}</span><button class="text-action danger-action" :disabled="loading || generating || !!deletingPlanId || plan.status === 'running'" @click="deletePlan()">删除此计划</button></div>
         <template v-if="plan?.result">
-          <div class="plan-result-head"><div><span class="plan-status-badge" :class="`state-${plan.status}`">{{ plan.status === 'confirmed' ? '已确认' : plan.status === 'ready' ? '待确认' : plan.status }}</span><p class="eyebrow">{{ plan.result.schema_version }} · {{ plan.provider }}</p><h2>{{ plan.inputs.direction || '模拟面试计划' }}</h2><p>{{ plan.resume_id ? `${plan.snapshot?.resume_name} · 简历 v${plan.source_version}` : '纯题库练习 · 无需简历和项目' }} · {{ plan.inputs.duration_minutes }} 分钟</p></div><div class="plan-detail-actions"><button class="text-action" @click="adjustPlan()">调整配置并生成新计划 →</button><button class="text-action danger-action" @click="deletePlan()">删除计划</button></div></div>
-          <div class="plan-summary"><span class="eyebrow">PLANNING INTENT</span><p>{{ plan.result.session_summary }}</p></div>
+          <div class="plan-result-head"><div><span class="plan-status-badge" :class="`state-${plan.status}`">{{ plan.status === 'confirmed' ? '已确认' : plan.status === 'ready' ? '待确认' : plan.status }}</span><p class="eyebrow">{{ plan.result.schema_version }} · {{ plan.provider }}</p><h2>{{ plan.inputs.direction || '模拟面试计划' }}</h2><p>{{ plan.resume_id ? `${plan.snapshot?.resume_name} · 简历 v${plan.source_version}` : '纯题库练习 · 无需简历和项目' }} · {{ plan.inputs.duration_minutes }} 分钟</p></div><div class="plan-detail-actions"><button class="text-action" @click="adjustPlan()">调整配置并生成新计划 →</button></div></div>
+          <section v-if="plan.resume_id" class="pending-plan-note" aria-label="模拟面试流程"><strong>自我介绍 → 项目介绍 → 动态深入提问 → 复盘</strong><p>面试开始后先听你介绍，再结合介绍、简历资料和本计划的目标提问。这里规划考察方向与预算，不提前固定整场题单。</p></section><div class="plan-summary"><span class="eyebrow">PLANNING INTENT</span><p>{{ plan.result.session_summary }}</p></div>
           <div class="budget-strip"><div v-if="plan.resume_id"><span>项目经历</span><b>{{ formatTime(plan.result.source_time_budget_sec.project || 0) }}</b></div><div><span>题库问题</span><b>{{ formatTime(plan.result.source_time_budget_sec.question_bank || 0) }}</b></div><div><span>开场 / 收尾</span><b>{{ formatTime(plan.result.opening_buffer_sec) }} / {{ formatTime(plan.result.closing_buffer_sec) }}</b></div><div><span>时间属性</span><b>参考预算 · 不强制到时结束</b></div></div>
           <div class="result-subhead"><div><p class="eyebrow">WHAT THIS SESSION WILL EXPLORE</p><h3>考察目标</h3></div><span>{{ plan.result.objectives.length }} 项</span></div>
           <article v-for="(objective, index) in plan.result.objectives" :key="objective.id" class="objective-card"><div class="objective-number">{{ String(index + 1).padStart(2, '0') }}</div><div class="objective-main"><div class="objective-title-row"><h4>{{ objective.topic }}</h4><span class="priority-tag" :class="`priority-${objective.priority}`">{{ objective.priority === 'high' ? '高优先级' : objective.priority === 'medium' ? '中优先级' : '低优先级' }}</span></div><p>{{ objective.completion_rule || '根据回答中的可观察证据判断目标覆盖。' }}</p><div class="evidence-list"><span v-for="item in objective.observable_evidence" :key="item">{{ item }}</span></div><div class="objective-meta"><span>{{ objective.source_preference === 'project' ? '项目依据' : '题库依据' }}</span><span>{{ formatTime(objective.time_budget_sec) }}</span><span>最多追问 {{ objective.max_followups }} 次</span></div></div></article>
@@ -200,29 +247,29 @@ onMounted(() => { void initialize() })
           <footer class="plan-result-footer"><span>依据快照已固定；再次调整会创建一份新计划。</span><button v-if="plan.status === 'ready'" class="button button-primary" :disabled="loading" @click="confirmPlan()">确认计划</button><RouterLink v-else-if="plan.status === 'confirmed'" class="button button-primary" :to="{ path: '/interviews', query: { plan: plan.id } }">按此计划开始练习 ↗</RouterLink><span v-else>当前状态不可确认</span></footer>
         </template>
         <template v-else-if="plan">
-          <section v-if="plan.status === 'running'" class="plan-failure" role="status"><span class="plan-status-badge">处理中</span><h2>计划正在生成。</h2><p>原配置与资料快照已保存。读取同一计划只查询结果，不会重复调用模型。</p><button class="button button-primary" :disabled="loading" @click="readPlan(plan.id)">读取原计划结果</button></section><section v-else class="plan-failure"><span class="plan-status-badge state-failed">生成未完成</span><p class="eyebrow">PLAN REQUEST · {{ plan.provider }}</p><h2>这份计划没有生成结果。</h2><p>{{ plan.error_message || plan.error_code || '原配置仍保留。你可以检查配置后重新发起一次生成。' }}</p><dl><div><dt>训练方向</dt><dd>{{ plan.inputs.direction || '未填写' }}</dd></div><div><dt>资料版本</dt><dd>{{ plan.resume_id ? `${plan.snapshot?.resume_name || '简历'} · v${plan.source_version}` : '纯题库练习' }}</dd></div></dl><button class="button button-primary" @click="adjustPlan()">返回原配置并重新生成 →</button></section>
+          <section v-if="plan.status === 'running'" class="plan-failure" role="status"><span class="plan-status-badge">处理中</span><h2>计划正在生成。</h2><p>原配置与资料快照已保存。读取同一计划只查询结果，不会重复调用模型。</p><button class="button button-primary" :disabled="loading" @click="readPlan(plan.id)">读取原计划结果</button></section><section v-else class="plan-failure"><span class="plan-status-badge state-failed">生成未完成</span><p class="eyebrow">PLAN REQUEST · {{ plan.provider }}</p><h2>这份计划没有生成结果。</h2><p>{{ plan.error_message || plan.error_code || '原配置仍保留。你可以检查配置后重新发起一次生成。' }}</p><dl><div><dt>训练方向</dt><dd>{{ plan.inputs.direction || '未填写' }}</dd></div><div><dt>资料版本</dt><dd>{{ plan.resume_id ? `${plan.snapshot?.resume_name || '简历'} · v${plan.source_version}` : '纯题库练习' }}</dd></div></dl><button v-if="plan.status === 'failed' && plan.provider === 'qwen'" class="button button-primary" :disabled="loading || generating" @click="generateRuleFallback()">使用原配置生成规则计划（不调用模型）</button><button class="button button-outline" :disabled="loading || generating" @click="adjustPlan()">返回原配置调整 →</button></section>
         </template>
         <template v-else>
           <div v-if="pendingPlanRequest && !generating" class="pending-plan-note" role="status"><p>上一次请求结果尚未确认，先读取原计划可避免重复生成。</p><button class="text-action" :disabled="loading" @click="readPlan(pendingPlanRequest.id)">读取原计划结果 →</button></div>
-          <div v-if="practiceMode === 'resume' && options && !options.resumes.length" class="pending-plan-note"><p>先保存一份简历，核对项目后再规划。也可以保存文字简历并选择题库练习。</p><RouterLink to="/materials">准备简历与项目 →</RouterLink></div>
+          <div v-if="practiceMode === 'resume' && options && !options.resumes.length" class="pending-plan-note"><p>简历面试需要一份已保存的简历和核对过的项目。上传新简历，或在下方切换为题库练习。</p><RouterLink to="/materials">上传简历 →</RouterLink></div>
           <fieldset class="plan-config" :disabled="generating || loading">
           <div class="planner-form-head"><div><p class="eyebrow">BUILD A SESSION PLAN</p><h2>先确定训练的边界。</h2><p>选择依据、方向与节奏。完成配置后才会调用规划服务。</p></div><div class="planner-steps"><button v-for="n in 3" :key="n" :class="{ active: step === n, done: step > n }" @click="step = n">0{{ n }}</button></div></div>
           <div v-if="step === 1" class="plan-step">
             <div class="step-intro"><span>01</span><div><h3>选择练习方式</h3><p>没有简历也可以直接练习自己的题库。</p></div></div>
             <div class="practice-mode-choice" role="group" aria-label="练习方式">
               <button type="button" :aria-pressed="practiceMode === 'question_bank'" :class="{ active: practiceMode === 'question_bank' }" @click="choosePracticeMode('question_bank')"><strong>纯题库练习</strong><span>无需上传资料，只问所选题库原题，不额外生成追问。AI 可用于反馈和复盘。</span></button>
-              <button type="button" :aria-pressed="practiceMode === 'resume'" :class="{ active: practiceMode === 'resume' }" @click="choosePracticeMode('resume')"><strong>简历项目面试</strong><span>基于已核对项目深入提问，也可以加入题库题。</span></button>
+              <button type="button" :aria-pressed="practiceMode === 'resume'" :class="{ active: practiceMode === 'resume' }" @click="choosePracticeMode('resume')"><strong>简历面试</strong><span>先进行自我介绍与项目介绍，再基于介绍和已核对资料深入提问，也可加入题库题。</span></button>
             </div>
             <div v-if="practiceMode === 'resume'" class="form-grid">
-              <label>简历<select v-model="selectedResume" @change="dirty = true"><option value="" disabled>选择简历</option><option v-for="item in options?.resumes" :key="item.id" :value="item.id">{{ item.name }}{{ item.is_active ? ' · 使用中' : '' }}</option></select></label>
+              <label>使用已有简历<select v-model="selectedResume" @change="dirty = true"><option value="" disabled>选择简历</option><option v-for="item in options?.resumes" :key="item.id" :value="item.id">{{ item.name }}{{ item.is_active ? ' · 使用中' : '' }}</option></select></label>
               <label>简历版本<select v-model.number="selectedVersion" @change="dirty = true"><option v-for="item in options?.versions" :key="item.version" :value="item.version">v{{ item.version }} · {{ item.name }}</option></select></label>
               <label>规划方式<select :value="config.mode" @change="updateConfig('mode', ($event.target as HTMLSelectElement).value as 'model' | 'rule')"><option value="model">AI 规划</option><option value="rule">规则规划</option></select></label>
-              <RouterLink to="/materials">上传简历并填写项目 →</RouterLink>
+              <RouterLink to="/materials">上传新的简历 →</RouterLink>
             </div>
             <p v-else class="inline-note">题库练习的计划由程序整理，不调用模型；开始练习时可选择 AI 反馈或规则练习。</p>
           </div>
           <div v-else-if="step === 2" class="plan-step"><div class="step-intro"><span>02</span><div><h3>材料范围</h3><p>候选资料池决定 Planner 可引用什么。题库目标依据会用已启用的题干。</p></div></div><template v-if="practiceMode === 'resume'"><div class="source-heading"><b>项目经历</b><button class="text-action" @click="selectedProjects = selectedProjects.length ? [] : projectsForVersion.map((item) => item.id)">{{ selectedProjects.length ? '清空' : '全选' }}</button></div><label v-for="item in projectsForVersion" :key="item.id" class="source-option"><input type="checkbox" :checked="selectedProjects.includes(item.id)" @change="selectedProjects = toggle(item.id, selectedProjects); dirty = true"/><span><strong>{{ item.name }}</strong><small>{{ item.fact_count }} 条已保存事实 · {{ item.tech_stack.join(' / ') }}</small></span><i>v{{ item.source_version }}</i></label><p v-if="!projectsForVersion.length" class="inline-note">该版本尚无项目事实。可只使用题库题。</p></template><div class="source-heading second-source"><b>个人题库 · {{ options?.question_total || 0 }} 道可用题，已选 {{ selectedQuestions.length }} / {{ maxQuestions }}</b><span class="source-actions"><button class="text-action" @click="selectedQuestions = sampleQuestions(); dirty = true">随机重选 {{ maxQuestions }} 道</button><button class="text-action" @click="selectedQuestions = []; dirty = true">清空</button></span></div><p v-if="options && !options.question_total" class="inline-note">还没有可用题目。<RouterLink to="/">先去个人题库导入、创建或启用题目 →</RouterLink></p><div class="question-source-list"><label v-for="item in options?.questions" :key="item.id" class="question-source"><input type="checkbox" :checked="selectedQuestions.includes(item.id)" @change="toggleQuestion(item.id)"/><span>{{ item.question_text }}</span><small>v{{ item.content_version }}</small></label></div></div>
-          <div v-else class="plan-step"><div class="step-intro"><span>03</span><div><h3>方向与节奏</h3><p>规划关注点和时间预算，系统会在目标内部动态提问。</p></div></div><div class="form-grid"><label class="wide-field">训练方向<input :value="config.direction" maxlength="500" placeholder="例如：RAG 可靠性、Agent 状态管理与服务交付" @input="updateConfig('direction', ($event.target as HTMLInputElement).value)"/></label><label>目标时长<select :value="config.duration_minutes" @change="updateConfig('duration_minutes', Number(($event.target as HTMLSelectElement).value))"><option v-for="minutes in [20,30,45,60,90,120]" :key="minutes" :value="minutes">{{ minutes }} 分钟</option></select></label><label v-if="practiceMode === 'resume'">追问总上限<input type="number" min="0" max="30" :value="config.max_total_followups" @input="updateConfig('max_total_followups', Number(($event.target as HTMLInputElement).value))"/></label></div><div v-if="practiceMode === 'resume'" class="ratio-control"><div><b>题源时间比例</b><small>当前项目资料 {{ projectsForVersion.length }} 组 · 题库 {{ options?.questions.length || 0 }} 道</small></div><label>项目 {{ sourceBalance }}%<input type="range" min="0" max="100" :value="sourceBalance" @input="updateConfig('project_ratio', Number(($event.target as HTMLInputElement).value) / 100)"/></label><label>题库 {{ 100 - sourceBalance }}%</label></div><p class="inline-note">目标时长用于节奏参考，不代表强制结束时间。追问边界由总预算和目标约束共同决定。</p></div>
+          <div v-else class="plan-step"><div class="step-intro"><span>03</span><div><h3>方向与节奏</h3><p>规划关注点和时间预算，系统会在目标内部动态提问。</p></div></div><div class="form-grid"><label class="wide-field">训练方向<input :value="config.direction" maxlength="500" placeholder="例如：RAG 可靠性、Agent 状态管理与服务交付" @input="updateConfig('direction', ($event.target as HTMLInputElement).value)"/></label><label>目标时长<select :value="config.duration_minutes" @change="updateConfig('duration_minutes', Number(($event.target as HTMLSelectElement).value))"><option v-for="minutes in [20,30,45,60,90,120]" :key="minutes" :value="minutes">{{ minutes }} 分钟</option></select></label><label v-if="practiceMode === 'resume'">追问设置<select v-model="followupMode" @change="dirty = true"><option value="auto">自动分配额度</option><option value="disabled">禁止额外追问</option><option value="limited">指定全场上限</option></select></label><label v-if="practiceMode === 'resume' && followupMode === 'limited'">追问总上限<input type="number" min="1" max="30" :value="config.max_total_followups" @input="updateConfig('max_total_followups', Number(($event.target as HTMLInputElement).value))"/></label></div><div v-if="practiceMode === 'resume'" class="ratio-control"><div><b>题源时间比例</b><small>当前项目资料 {{ projectsForVersion.length }} 组 · 题库 {{ options?.questions.length || 0 }} 道</small></div><label>项目 {{ sourceBalance }}%<input type="range" min="0" max="100" :value="sourceBalance" @input="updateConfig('project_ratio', Number(($event.target as HTMLInputElement).value) / 100)"/></label><label>题库 {{ 100 - sourceBalance }}%</label></div><p class="inline-note">目标时长用于节奏参考，不代表强制结束时间。追问边界由总预算和目标约束共同决定。</p></div>
           <footer class="step-footer"><button class="button button-outline" :disabled="step === 1" @click="step--">← 上一步</button><span>第 {{ step }} / 3 步 · 此处仅收集配置</span><button v-if="step < 3" class="button button-primary" @click="nextStep()">继续 →</button><button v-else class="button button-primary" :disabled="generating || loading" @click="generate()">{{ generating ? '正在生成…' : '生成计划' }} ↗</button></footer>
           </fieldset>
         </template>

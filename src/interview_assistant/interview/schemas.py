@@ -57,7 +57,7 @@ class DecisionDraft(InputModel):
     """模型只做本轮判断与措辞；是否追问、切目标与收尾由服务端按配额决定。
 
     字段顺序即输出顺序：判定字段在前，`say` 紧随其后，其余元数据在后。
-    这样流式调用可以先拿到判定，再把面试官要说的话逐字流出来。
+    完整解析、配额校验与落库后，才向页面发送实际保存的问题。
     """
 
     schema_version: str = Field(default="interview_decision.v2", max_length=32)
@@ -215,13 +215,21 @@ class ObjectiveProgress(InputModel):
     asked: int = Field(default=0, ge=0)
     followups: int = Field(default=0, ge=0)
     cursor: int = Field(default=0, ge=0)
+    elapsed_sec: int = Field(default=0, ge=0)
+    started_elapsed_sec: int | None = Field(default=None, ge=0)
 
 
 class SessionProgress(InputModel):
     objectives: list[ObjectiveProgress]
     followups_used: int = Field(default=0, ge=0)
     started_at: datetime
+    paused_seconds: float = Field(default=0, ge=0)
+    paused_at: datetime | None = None
     completion_reason: str = ""
+    # 缺省 technical 兼容已有场次；只有新建简历面试才显式从自我介绍开始。
+    phase: Literal["self_introduction", "project_introduction", "technical"] = "technical"
+    opening_questions: dict[Literal["self_introduction", "project_introduction"], str] = Field(default_factory=dict)
+    opening_answers: dict[Literal["self_introduction", "project_introduction"], str] = Field(default_factory=dict)
 
     def state(self, objective_id: str) -> ObjectiveProgress:
         for item in self.objectives:
@@ -239,6 +247,7 @@ class TurnDecision(InputModel):
 
 
 class TurnRead(BaseModel):
+    stage: Literal["self_introduction", "project_introduction", "technical"] = "technical"
     id: UUID
     sequence: int
     role: Literal["interviewer", "candidate"]
@@ -263,9 +272,11 @@ class ObjectiveState(BaseModel):
     followups: int
     max_followups: int
     time_budget_sec: int
+    elapsed_sec: int = 0
 
 
 class SessionRead(BaseModel):
+    phase: Literal["self_introduction", "project_introduction", "technical"] = "technical"
     practice_mode: Literal["question_bank", "resume"] = "resume"
     id: UUID
     plan_id: UUID

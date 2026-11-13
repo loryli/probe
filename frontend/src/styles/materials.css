@@ -5,7 +5,6 @@
 :where(.materials-page) .resume-choice > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 :where(.materials-page) .resume-choice strong { overflow: hidden; color: #556052; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 :where(.materials-page) .resume-choice small { color: #9ba39a; font-size: 10px; }
-:where(.materials-page) .add-resume { align-self: flex-start; margin: 7px 0 18px; }
 :where(.materials-page) .version-rail { display: grid; gap: 4px; padding-top: 14px; border-top: 1px solid #e5e9e2; }
 :where(.materials-page) .version-rail > p { margin-bottom: 4px; }
 :where(.materials-page) .version-rail button { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 5px; padding: 7px; border: 0; border-radius: 5px; background: transparent; color: #758071; text-align: left; cursor: pointer; }
@@ -141,7 +140,12 @@
 /* 项目表单以内容为主，来源依据和原文选取均按需展开。 */
 :where(.materials-page) .materials-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin: 8px 0 24px; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 12px; color: #8b9585; }
 :where(.materials-page) .materials-flow .done, :where(.materials-page) .materials-flow .active { color: #4e6740; }
-:where(.materials-page) .materials-flow a { margin-left: auto; color: #677d4a; }
+:where(.materials-page) .materials-flow .active { font-weight: 700; text-decoration: underline; text-underline-offset: 6px; }
+:where(.materials-page) .resume-other-method { align-self: center; color: #7b8677; font-size: 12px; }
+:where(.materials-page) .resume-other-method summary { padding: 8px 0; cursor: pointer; }
+:where(.materials-page) .resume-other-method button { display: block; margin: 8px 0; }
+:where(.materials-page) .materials-empty .resume-other-method { margin-top: 16px; }
+:where(.materials-page) .resume-step-help { color: #7b8677; font-size: 13px; line-height: 1.8; }
 :where(.materials-page) .project-form-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 :where(.materials-page) .project-editor > .editor-title strong { color: #3e5037; font-size: 16px; }
 :where(.materials-page) .project-editor > .editor-title p { margin: 6px 0 0; font-size: 12px; line-height: 1.8; color: #7b8773; }

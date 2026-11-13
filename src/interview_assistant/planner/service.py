@@ -22,6 +22,7 @@ from interview_assistant.planner.prompt import (
     RULE_PROMPT_VERSION,
     SCHEMA_VERSION,
     messages,
+    reference_maps,
 )
 from interview_assistant.planner.schemas import (
     MAX_FACTS_PER_PROJECT,
@@ -503,6 +504,7 @@ class PlannerService:
         """摘要、预算、追问配额、覆盖率与运行时上下文均由程序完成，模型只给语义骨架。"""
         valid_facts = {str(fact.id) for project in snapshot.projects for fact in project.facts}
         valid_questions = {str(item.id) for item in snapshot.questions}
+        fact_refs, question_refs = reference_maps(snapshot)
         sources = planning_sources(snapshot, inputs)
         system_notes: list[str] = list(limitations)
         model_notes, removed_notes = filter_model_notes(
@@ -517,12 +519,36 @@ class PlannerService:
         objectives: list[PlanObjective] = []
         version_warning = False
         for raw in draft.objectives[:objective_limit(inputs.duration_minutes)]:
-            fact_ids = list(dict.fromkeys(raw.project_fact_ids))
-            question_ids = list(dict.fromkeys(raw.question_ids))
+            fact_ids = list(dict.fromkeys(fact_refs.get(item, item) for item in raw.project_fact_ids))
+            question_ids = list(dict.fromkeys(question_refs.get(item, item) for item in raw.question_ids))
             facts = [item for item in fact_ids if item in valid_facts]
             questions = [item for item in question_ids if item in valid_questions]
             if len(facts) != len(fact_ids) or len(questions) != len(question_ids):
-                raise PlannerError("invalid_plan_reference", "模型返回了不在本次资料中的引用，请调整资料或切换规则模式")
+                invalid_facts = len(fact_ids) - len(facts)
+                invalid_questions = len(question_ids) - len(questions)
+                # 引用字段也是模型输出，可能夹带资料正文；只允许安全的短标识进入日志与报错。
+                rejected_facts = [
+                    item if re.fullmatch(r"f[1-9][0-9]{0,3}", item) else "非法事实标识"
+                    for item in fact_ids if item not in valid_facts
+                ][:3]
+                rejected_questions = [
+                    item if re.fullmatch(r"q[1-9][0-9]{0,3}", item) else "非法题目标识"
+                    for item in question_ids if item not in valid_questions
+                ][:3]
+                logger.warning(
+                    "Planner references rejected; objective=%d invalid_facts=%d invalid_questions=%d"
+                    " fact_refs=%s question_refs=%s",
+                    len(objectives) + 1, invalid_facts, invalid_questions,
+                    ",".join(rejected_facts) or "-", ",".join(rejected_questions) or "-",
+                )
+                sample = "、".join([*rejected_facts, *rejected_questions])
+                raise PlannerError(
+                    "invalid_plan_reference",
+                    f"第 {len(objectives) + 1} 个目标含 {invalid_facts} 条未知事实引用、"
+                    f"{invalid_questions} 条未知题目引用"
+                    + (f"（{sample}）" if sample else "")
+                    + "，未保存不可靠计划；可使用原配置生成规则计划",
+                )
             source = raw.source_preference
             if (source not in sources or (source == "project" and not facts)
                     or (source == "question_bank" and not questions)
@@ -604,7 +630,10 @@ class PlannerService:
                 objective.time_budget_sec = seconds
 
         # 追问配额先给每个有意愿的目标保底一次，再按优先级分配剩余额度。
-        max_total = (inputs.max_total_followups or min(12, max(3, inputs.duration_minutes // 5))) if inputs.resume_id else 0
+        max_total = (
+            min(12, max(3, inputs.duration_minutes // 5))
+            if inputs.max_total_followups is None else inputs.max_total_followups
+        ) if inputs.resume_id else 0
         cap = min(3, max_total)
         desired = [max(0, min(item.max_followups, cap)) for item in objectives]
         if sum(desired) <= max_total:
@@ -656,8 +685,14 @@ class PlannerService:
             "目标时长仅作节奏参考，到时不强制结束；追问受总上限与各目标上限约束。",
             "计划只含考察目标与预算，不含固定问题清单；具体问题由后续面试环节动态生成。",
         ]
+        if inputs.resume_id is not None:
+            policy_notes.append("简历面试先进行自我介绍与项目介绍，再结合本场介绍和冻结资料动态提问；介绍不直接作为已核实项目事实或技术目标覆盖证据。")
         if inputs.resume_id is None:
             policy_notes.append("纯题库练习只使用冻结的题库原题，不生成项目题或额外追问；AI 可用于回答反馈与复盘。")
+        elif inputs.max_total_followups is None:
+            policy_notes.append(f"追问额度为自动分配，本场总上限 {max_total} 次；实际追问仍受回答内容和目标预算约束。")
+        elif max_total == 0:
+            policy_notes.append("本场已明确禁止额外追问；下一道基础题仍可按计划继续，不把追问改名为续问。")
         if mode == "rule":
             policy_notes.append(
                 "本计划由规则整理题库范围，未调用模型；练习时可选择 AI 反馈或规则练习。"
@@ -963,7 +998,9 @@ class PlannerService:
     async def verify_references(self, row: InterviewPlan) -> None:
         """确认前复核固定引用：资料被编辑或停用后不悄悄沿用旧计划。"""
         snapshot, _ = self.current_contract(row)
-        if snapshot.resume_id != row.resume_id or snapshot.source_version != row.source_version:
+        # Pydantic 快照使用 UUID，数据库列使用字符串；先统一类型，空简历仍保留 None。
+        snapshot_resume_id = str(snapshot.resume_id) if snapshot.resume_id is not None else None
+        if snapshot_resume_id != row.resume_id or snapshot.source_version != row.source_version:
             raise stale("计划资料标识与冻结快照不一致，请重新生成")
         if row.resume_id is not None:
             resume = await self.session.scalar(select(Resume).where(

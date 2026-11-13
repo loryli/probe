@@ -1,5 +1,9 @@
 # Prompt、结构化输出与 API 草案
 
+## 当前开场阶段契约
+
+`SessionRead.phase` 和 `TurnRead.stage` 可取 `self_introduction`、`project_introduction`、`technical`。新建简历场次从自我介绍开始，题库场次直接为 technical。阶段和开场问答的轮次映射保存在现有 progress JSON，无新增数据库列；旧 JSON 默认 technical。开场沿用现有提交、SSE、revision 和幂等接口。介绍上下文附保存轮次 ID、最多 4000 字符正文及截断标记，只作未核实数据；不替代原回答，也不作为技术目标覆盖证据。实时提示升级为 interview_prompt.v8，项目问题骨架为 interview_outline_prompt.v3，复盘为 interview_report_prompt.v2。Apifox 可重新导入 `/openapi.json` 获取新增读取字段。
+
 ## 1. 通用模型调用约定
 
 - 每个 AI 功能有独立 prompt/schema 版本；记录模型标识、延迟、token/用量和结果校验状态。
@@ -21,7 +25,7 @@
 
 **输出**：`projects[]`、项目字段、`facts[]`、证据位置、`confidence`、`needs_confirmation[]`。
 
-**当前实现补充（2026-11-12）**：`resume_extract.v2` 提示接收编号原文行；模型输出内部 `resume_extract_refs.v1`，以 `start_line/end_line` 标注连续原文范围（从 1 开始，含末行）。服务端校验范围并还原事实正文及引用，再保存为对外的 `resume_parse.v1` 草稿；无效范围排除并提示，不接收模型补写正文。使用流式接收及独立的简历提取时限，结果完整校验前不作为可确认候选。
+**当前实现补充（2026-11-12）**：`resume_extract.v3` 提示接收编号原文行；模型输出内部 `resume_extract_refs.v1`，以 `start_line/end_line` 标注连续原文范围（从 1 开始，含末行）。服务端校验范围并还原事实正文及引用，再保存为对外的 `resume_parse.v1` 草稿；无效范围排除并提示，不接收模型补写正文。使用流式接收及独立的简历提取时限，结果完整校验前不作为可确认候选。
 
 **备用实现**：用户可选择 `mode=rule`，不调用模型，只从已保存简历的项目章节、日期、标题及段落生成本地候选。草稿 `provider=local_rules`，未知角色/技术栈等留空，不做能力判断；规则的 `confidence=0` 只是兼容字段，不代表模型评分。无法识别可靠边界时提示人工分组。两种模式均固定来源版本，经同一人工确认事务保存，失败记录、原文与已有项目不被覆盖。
 
@@ -36,6 +40,12 @@
 **输出**：元数据草稿与置信度。服务端只允许写入 metadata 表。
 
 ### 2.3 Interview Planner
+
+当前输入 `max_total_followups` 允许空值：`null`/省略为自动额度、`0` 为明确禁止、1–30 为指定全场上限。旧已确认计划的冻结额度不重算。
+
+`planner_prompt.v4` 输入使用请求内短引用（事实 f1/f2、题目 q1/q2）；输出经精确映射恢复 UUID，再做原有来源和范围校验。未知标识仍拒绝，日志只记录目标序号与无效引用数量。生成失败可由用户主动发起同配置的规则计划，不自动调用备选模型。
+
+面试 SSE 保持 ack/delta/state 事件格式；delta 只包含已经校验并落库的实际下一问，不转发未通过约束的模型原始措辞。`ObjectiveState.elapsed_sec` 返回目标有效耗时，暂停时间排除；现有进度 JSON 新字段有向后兼容默认值，无新增数据库列。
 
 当前实现支持纯题库计划：`resume_id/source_version` 可同时为空，`project_ids` 为空、题库至少一题；服务端固定项目比例和额外追问上限为零。页面用规则组织题库目标与预算，不调用规划模型，AI 面试模式仅评价回答和生成复盘，下一问仍由服务端读取冻结的题库原题。简历项目模式继续传真实版本与已核对项目。已确认计划不因资料更新改变，具体接口字段以 `/openapi.json` 为准。
 

@@ -1,7 +1,6 @@
 """文字面试运行时：冻结计划、先落库回答再决策、状态守卫与断点续接。"""
 
 import logging
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -73,7 +72,9 @@ from interview_assistant.planner.service import PlannerError, PlannerService
 from interview_assistant.planner.text import plain_text
 from interview_assistant.interview.errors import InterviewError, conflict
 from interview_assistant.interview.questioning import NextTurn, QuestioningService
+from interview_assistant.interview.opening import OpeningService
 from interview_assistant.interview.reporting import ReportService
+from interview_assistant.interview.timing import active_seconds, close_pause, objective_seconds, settle_objectives
 
 logger = logging.getLogger(__name__)
 
@@ -106,72 +107,6 @@ class DecisionContext:
     messages: list[object]
 
 
-_SAY_PATTERN = re.compile(r'"say"\s*:\s*"')
-
-
-class SayExtractor:
-    """从流式 JSON 里增量抽出 "say" 的字符串值。
-
-    整包 JSON 只在本轮结束时才完整，但面试官要说的话已经在流里了；
-    这里按字符解码（含转义），让前端可以逐字显示而不是等整包。
-    """
-
-    __slots__ = ("_buffer", "_started", "_closed", "_escape")
-
-    def __init__(self) -> None:
-        self._buffer = ""
-        self._started = False
-        self._closed = False
-        self._escape = False
-
-    def feed(self, chunk: str) -> str:
-        if self._closed or not chunk:
-            return ""
-        if not self._started:
-            self._buffer += chunk
-            match = _SAY_PATTERN.search(self._buffer)
-            if match is None:
-                # 只留尾部可能的半个键名，避免未命中时缓冲无限增长。
-                self._buffer = self._buffer[-16:]
-                return ""
-            self._started = True
-            self._buffer = self._buffer[match.end():]
-        else:
-            self._buffer += chunk
-        out: list[str] = []
-        index = 0
-        size = len(self._buffer)
-        while index < size:
-            char = self._buffer[index]
-            if self._escape:
-                if char == "u":
-                    if size - index < 5:
-                        break
-                    try:
-                        out.append(chr(int(self._buffer[index + 1:index + 5], 16)))
-                    except ValueError:
-                        pass
-                    index += 5
-                    self._escape = False
-                    continue
-                out.append({"n": " ", "t": " ", "r": " "}.get(char, char))
-                self._escape = False
-                index += 1
-                continue
-            if char == "\\":
-                self._escape = True
-                index += 1
-                continue
-            if char == '"':
-                self._closed = True
-                index += 1
-                break
-            out.append(char)
-            index += 1
-        self._buffer = self._buffer[index:]
-        return "".join(out)
-
-
 class InterviewService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -179,6 +114,7 @@ class InterviewService:
         # 组合对象共享同一个 AsyncSession；事务边界仍由本类各方法持有，
         # 子对象不开启跨服务事务，也不缓存跨请求的数据库状态。
         self.questions = QuestioningService(self)
+        self.opening = OpeningService(self)
         self.reports = ReportService(self)
 
     # ---------- 读取 ----------
@@ -242,9 +178,38 @@ class InterviewService:
         )
         return (value or 0) + 1
 
+    @staticmethod
+    def elapsed(row: InterviewSession, progress: SessionProgress) -> int:
+        return active_seconds(row.started_at, row.ended_at, row.status, row.updated_at, progress)
+
+    @staticmethod
+    def _followup_allowance(
+        runtime: PlanRuntime, objective: PlanRuntimeObjective,
+        state: ObjectiveProgress, progress: SessionProgress,
+        *, question_is_followup: bool = False,
+    ) -> int:
+        """本目标此刻还能追问几次；决策提示与落库共用这一处判断。
+
+        混合面试的题库原题至多追加一次追问，不能把之前未用的额度连续用在同一道题上。
+        是否已经追问从所回答的真实轮次判断，不依赖模型或累计游标猜测。
+        """
+        if runtime.resume_id is None:
+            return 0
+        if objective.source == "question_bank" and (question_is_followup or state.cursor == 0):
+            return 0
+        allowance = max(0, min(
+            objective.max_followups - state.followups,
+            runtime.constraints.max_total_followups - progress.followups_used,
+            runtime.constraints.max_followups_per_objective - state.followups,
+        ))
+        if objective.source == "question_bank":
+            allowance = min(allowance, max(0, state.cursor - state.followups))
+        return allowance
+
     def read(self, row: InterviewSession, turns: list[InterviewTurn]) -> SessionRead:
         runtime = PlanRuntime.model_validate(row.runtime_json)
         progress = SessionProgress.model_validate(row.progress_json)
+        elapsed = self.elapsed(row, progress)
         states = [
             ObjectiveState(
                 id=objective.id,
@@ -256,12 +221,15 @@ class InterviewService:
                 followups=progress.state(objective.id).followups,
                 max_followups=objective.max_followups,
                 time_budget_sec=objective.time_budget_sec,
+                elapsed_sec=objective_seconds(progress.state(objective.id), elapsed),
             )
             for objective in runtime.objectives
         ]
         answered = {turn.answers_turn_id for turn in turns if turn.answers_turn_id}
         reads = [
             TurnRead(
+                stage=next((stage for stage, question_id in progress.opening_questions.items()
+                            if turn.id == question_id or turn.answers_turn_id == question_id), "technical"),
                 id=UUID(turn.id),
                 sequence=turn.sequence,
                 role=turn.role,
@@ -292,9 +260,8 @@ class InterviewService:
             (turn for turn in turns if turn.role == "candidate" and turn.decision_json is None),
             None,
         )
-        end = row.ended_at or utc_now()
-        elapsed = max(0, int((end - row.started_at).total_seconds()))
         return SessionRead(
+            phase=progress.phase,
             practice_mode="resume" if runtime.resume_id else "question_bank",
             id=UUID(row.id),
             plan_id=UUID(row.plan_id),
@@ -348,6 +315,7 @@ class InterviewService:
                         InterviewSession.started_at,
                         InterviewSession.ended_at,
                         InterviewSession.created_at,
+                        InterviewSession.updated_at,
                     ).order_by(InterviewSession.created_at.desc(), InterviewSession.id)
                     .limit(limit).offset(offset)
                 ))
@@ -364,7 +332,6 @@ class InterviewService:
                 items: list[SessionSummary] = []
                 for row in rows:
                     progress = SessionProgress.model_validate(row.progress_json)
-                    end = row.ended_at or utc_now()
                     items.append(SessionSummary(
                         id=UUID(row.id),
                         plan_id=UUID(row.plan_id),
@@ -378,7 +345,7 @@ class InterviewService:
                             1 for item in progress.objectives
                             if item.status in {"covered", "skipped"}
                         ),
-                        elapsed_sec=max(0, int((end - row.started_at).total_seconds())),
+                        elapsed_sec=active_seconds(row.started_at, row.ended_at, row.status, row.updated_at, progress),
                         created_at=row.created_at,
                         started_at=row.started_at,
                         ended_at=row.ended_at,
@@ -462,6 +429,7 @@ class InterviewService:
                 progress = SessionProgress(
                     objectives=[ObjectiveProgress(id=item.id) for item in runtime.objectives],
                     started_at=now,
+                    phase="self_introduction" if runtime.resume_id is not None else "technical",
                 )
                 row = InterviewSession(
                     id=session_id,
@@ -497,12 +465,7 @@ class InterviewService:
         except StaleDataError:
             raise conflict() from None
 
-        # 只给第一个待考察目标预生成题目：开场等待与单轮出题同量级。
-        # 骨架只是加速手段，任何失败都不该让「开始面试」整体失败。
-        try:
-            await self._ensure_outline(session_id, limit=1)
-        except Exception:
-            logger.exception("Interview outline failed; session_id=%s", session_id)
+        # 简历面试先保存介绍；技术问题在介绍完成后按本场上下文生成。
         await self._ask_next(session_id)
         return await self.get(session_id), True
 
@@ -525,21 +488,31 @@ class InterviewService:
 
     async def _ask_next_question(self, session_id: str) -> None:
         """为下一个待考察目标出题；题库题直接用用户原题，不调用模型。"""
+        if await self.opening.ensure_question(session_id):
+            return
         for _ in range(16):
             async with self.session.begin():
-                row = await self.require_session(session_id)
+                row = await self.require_session(session_id, lock=True)
                 if row.status != "active" or row.current_turn_id is not None:
                     return
                 runtime = PlanRuntime.model_validate(row.runtime_json)
                 progress = SessionProgress.model_validate(row.progress_json)
-                elapsed = max(0, int((utc_now() - row.started_at).total_seconds()))
+                elapsed = self.elapsed(row, progress)
                 mode = row.mode
                 plan_id = row.plan_id
                 outline = SessionOutline.model_validate(row.outline_json or {})
                 # 事务内先取历史用量与近期问题，块外的取题与出题只用缓存。
                 await self._question_usage(plan_id, session_id)
                 await self._avoid_questions(plan_id, session_id)
-                picked = self._next_pending(runtime, progress, session_id=session_id)
+                previous_statuses = [item.status for item in progress.objectives]
+                picked = self._next_pending(
+                    runtime, progress, session_id=session_id,
+                    preferred=self.opening.preferred_objective(runtime, progress, await self.turns(session_id)),
+                )
+                if previous_statuses != [item.status for item in progress.objectives]:
+                    row.progress_json = progress.model_dump(mode="json")
+                    row.updated_at = utc_now()
+                    await self.session.flush()
             if picked is None:
                 await self._complete(session_id, "所有考察目标已完成，场次自动结束。")
                 return
@@ -603,11 +576,17 @@ class InterviewService:
                 "请先配置 Qwen 密钥与模型；也可用规则模式重开一场",
             )
         model = QwenModel(self.settings)
+        async with self.session.begin():
+            row = await self.require_session(session_id)
+            introduction = self.opening.context(
+                SessionProgress.model_validate(row.progress_json), await self.turns(session_id),
+            )
         try:
             draft = await model.generate(
                 messages=question_messages(
                     runtime=runtime, objective=objective, elapsed_sec=elapsed,
                     avoid=self._avoid.get(session_id, []),
+                    introduction=introduction,
                 ),
                 output_type=QuestionDraft,
                 prompt_version=PROMPT_VERSION,
@@ -643,6 +622,7 @@ class InterviewService:
     async def _create_turn(
         self, row: InterviewSession, progress: SessionProgress, plan: NextTurn,
     ) -> InterviewTurn:
+        settle_objectives(progress, self.elapsed(row, progress), plan.objective_id)
         state = progress.state(plan.objective_id)
         if plan.activate:
             state.status = "active"
@@ -783,7 +763,7 @@ class InterviewService:
     async def decide_stream(
         self, session_id: str, answer_turn_id: str, emit: Callable[[str], None],
     ) -> None:
-        """流式决策：判定字段一到就先拿 say，逐段交给 emit 展示。"""
+        """模型内部流式接收；仅将校验并保存后的实际问题交给 SSE 展示。"""
         await self._run_decision(session_id, answer_turn_id, emit=emit)
 
     async def _decision_context(
@@ -814,13 +794,16 @@ class InterviewService:
                 if item.sequence < answer_turn.sequence
                 and item.role in {"interviewer", "candidate"}
             ][-MAX_TURNS_IN_PROMPT:]
-            elapsed = max(0, int((utc_now() - row.started_at).total_seconds()))
+            elapsed = self.elapsed(row, progress)
             remaining = runtime.duration_target_sec - elapsed
-            followups_remaining = max(0, min(
-                objective.max_followups - state.followups,
-                runtime.constraints.max_total_followups - progress.followups_used,
-            ))
-            follow_up_allowed = followups_remaining > 0 and remaining > -60
+            followups_remaining = self._followup_allowance(
+                runtime, objective, state, progress,
+                question_is_followup=question_turn is None or question_turn.is_followup,
+            )
+            follow_up_allowed = (
+                followups_remaining > 0 and remaining > -60
+                and objective_seconds(state, elapsed) < objective.time_budget_sec
+            )
             base_remaining = self._base_remaining(objective, state)
             mode = row.mode
             answer_text = answer_turn.text
@@ -840,6 +823,7 @@ class InterviewService:
                     followups_remaining=followups_remaining if follow_up_allowed else 0,
                     base_remaining=base_remaining,
                     asked=asked, avoid=avoid,
+                    introduction=self.opening.context(progress, turns),
                 ))
         return DecisionContext(
             runtime=runtime, objective=objective, state=state, progress=progress,
@@ -852,6 +836,14 @@ class InterviewService:
     async def _run_decision(
         self, session_id: str, answer_turn_id: str, *, emit: Callable[[str], None] | None,
     ) -> None:
+        opening_step = await self.opening.advance_answer(session_id, answer_turn_id)
+        if opening_step is not None:
+            if opening_step:
+                await self._ask_next(session_id)
+                result = await self.get(session_id)
+                if emit is not None and result.current_turn is not None:
+                    emit(result.current_turn.text)
+            return
         context = await self._decision_context(session_id, answer_turn_id)
         if context is None:
             return
@@ -865,8 +857,6 @@ class InterviewService:
                 base_remaining=context.base_remaining,
             )
             elapsed_ms = 0
-            if emit is not None and decision.spoken and context.runtime.resume_id is not None:
-                emit(decision.spoken)
         else:
             if not configuration_status(self.settings)["configured"]:
                 await self.set_error(session_id, ModelError(
@@ -875,10 +865,9 @@ class InterviewService:
                 ))
                 return
             model = QwenModel(self.settings)
-            extractor = SayExtractor()
             started = time.monotonic()
             try:
-                async for chunk in model.generate_stream(
+                async for _ in model.generate_stream(
                     messages=context.messages,  # type: ignore[arg-type]
                     output_type=DecisionDraft,
                     prompt_version=PROMPT_VERSION,
@@ -886,13 +875,9 @@ class InterviewService:
                     temperature=self.settings.qwen_interview_temperature,
                     max_tokens=DECISION_MAX_TOKENS,
                 ):
-                    if emit is None or context.runtime.resume_id is None:
-                        continue
-                    piece = extractor.feed(chunk)
-                    if piece:
-                        emit(piece)
+                    # 未校验的措辞不能先展示：额度、来源和并发状态以落库时为准。
+                    pass
             except ModelError as failure:
-                # 已经流出去的文字无法撤回；这里只记录错误，前端据 error_code 提示重试。
                 await self.set_error(session_id, failure)
                 return
             elapsed_ms = round((time.monotonic() - started) * 1000)
@@ -903,7 +888,9 @@ class InterviewService:
                 ))
                 return
             decision = draft
-        await self._apply(session_id, answer_turn_id, decision, elapsed_ms, model)
+        spoken = await self._apply(session_id, answer_turn_id, decision, elapsed_ms, model)
+        if emit is not None and spoken:
+            emit(spoken)
 
     async def _apply(
         self,
@@ -912,8 +899,9 @@ class InterviewService:
         decision: DecisionDraft,
         elapsed_ms: int,
         model: QwenModel | None,
-    ) -> None:
+    ) -> str | None:
         """写入决策与下一问前重新加锁校验：暂停、结束或已推进时丢弃模型结果。"""
+        saved_question: str | None = None
         try:
             async with self.session.begin():
                 row = await self.require_session(session_id, lock=True)
@@ -936,15 +924,30 @@ class InterviewService:
                 if objective is None:
                     return
                 state = progress.state(objective.id)
-                elapsed = max(0, int((utc_now() - row.started_at).total_seconds()))
+                elapsed = self.elapsed(row, progress)
                 remaining = runtime.duration_target_sec - elapsed
-                followups_remaining = max(0, min(
-                    objective.max_followups - state.followups,
-                    runtime.constraints.max_total_followups - progress.followups_used,
-                ))
+                question_turn = next(
+                    (item for item in turns if item.id == answer_turn.answers_turn_id), None,
+                )
+                followups_remaining = self._followup_allowance(
+                    runtime, objective, state, progress,
+                    question_is_followup=question_turn is None or question_turn.is_followup,
+                )
                 # 目标时长只作节奏参考：超时不再新增追问，但仍可切目标或同目标续问，
                 # 不因到时强制结束；结束由用户主动操作或所有考察目标完成后触发。
-                follow_up_allowed = followups_remaining > 0 and remaining > -60
+                follow_up_allowed = (
+                    followups_remaining > 0 and remaining > -60
+                    and objective_seconds(state, elapsed) < objective.time_budget_sec
+                )
+                if decision.follow_up_needed and not follow_up_allowed:
+                    # 模型要追问但服务端不放行：留下的必须是基础题，不能让同一句改成普通题入库。
+                    logger.info(
+                        "Interview follow-up rejected by server; session_id=%s objective=%s"
+                        " source=%s allowance=%d used=%d cursor=%d elapsed=%d budget=%d",
+                        session_id, objective.id, objective.source, followups_remaining,
+                        state.followups, state.cursor, objective_seconds(state, elapsed),
+                        objective.time_budget_sec,
+                    )
                 base_remaining = self._base_remaining(objective, state)
                 # 题库取题顺序依赖历史用量；在本事务内取一次即可。
                 await self._question_usage(row.plan_id, session_id)
@@ -954,8 +957,33 @@ class InterviewService:
                 # 回答几乎没有内容（如“不知道”）时不再追问细节，换更基础的问法或直接切题。
                 answer_text = answer_turn.text or ""
                 substantive = len(answer_text.strip()) >= MIN_SUBSTANTIVE_ANSWER
-                # say 已经流式展示给用户，落库必须用同一句，否则页面会跳变。
                 spoken = decision.spoken
+                followup_requested = decision.follow_up_needed
+                repeated = any(
+                    "".join(turn.text.split()).casefold() == "".join(spoken.split()).casefold()
+                    for turn in turns if turn.role == "interviewer" and spoken
+                )
+                preferred = self._objective(runtime, decision.next_objective_id)
+                switch_requested = (
+                    not followup_requested and preferred is not None
+                    and preferred.id != objective.id
+                    and progress.state(preferred.id).status in {"pending", "active"}
+                    and self._base_remaining(preferred, progress.state(preferred.id)) > 0
+                )
+                # 时间预算的运行时节奏：本目标已用满自身预算且还有其他未完成目标时，
+                # 基础题也不再留在本目标，交回下方 _next_turn 按题源份额选目标。
+                # 本目标状态保持不变（剩余基础题不丢），其他目标问完后仍会回来问完；
+                # 不因到时强制结束；纯题库模式不适用（承诺问完所选原题）。
+                defer_for_budget = (
+                    runtime.resume_id is not None
+                    and base_remaining > 0
+                    and any(
+                        item.id != objective.id
+                        and progress.state(item.id).status in {"pending", "active"}
+                        for item in runtime.objectives
+                    )
+                    and objective_seconds(state, elapsed) >= objective.time_budget_sec
+                )
                 if runtime.resume_id is None:
                     # 纯题库模式不接受模型自拟追问，也不因某次回答达标跳过同组剩余原题。
                     snapshot = self._pick_bank(
@@ -969,20 +997,18 @@ class InterviewService:
                         state.status = "covered"
                 elif decision.objective_status == "covered":
                     state.status = "covered"
-                elif (follow_up_allowed and substantive and spoken
-                      and (decision.follow_up_needed
-                           or decision.objective_status == "insufficient")):
+                elif (follow_up_allowed and substantive and spoken and not repeated
+                      and followup_requested):
                     next_turn = NextTurn(
                         objective.id, objective.source,
                         spoken[:300], is_followup=True,
                     )
                     action = "follow_up"
-                elif base_remaining > 0 and decision.next_objective_id == objective.id:
-                    # 同目标续问：模型刚说的话优先，骨架只作兜底。
-                    text = spoken or self._outline_question(outline, objective, state)
-                    if text:
-                        next_turn = NextTurn(objective.id, objective.source, text[:400])
-                        action = "continue"
+                elif defer_for_budget:
+                    # 超预算让位：不改状态、不出本目标基础题，走 _next_turn 按份额切目标。
+                    pass
+                elif switch_requested:
+                    state.status = "covered"
                 elif base_remaining > 0 and objective.source == "question_bank":
                     snapshot = self._pick_bank(
                         self._bank_order(row.plan_id, session_id, runtime, objective),
@@ -1011,22 +1037,29 @@ class InterviewService:
                     state.status = "covered"
 
                 if next_turn is not None:
-                    # 追问与同目标续问在本轮决策里已给出措辞，必须落库，
-                    # 否则场次会停在「当前没有待回答的问题」。
-                    await self._create_turn(row, progress, next_turn)
+                    created_turn = await self._create_turn(row, progress, next_turn)
+                    saved_question = created_turn.text
                 else:
                     picked = await self._next_turn(
                         runtime, progress, outline=outline,
                         plan_id=row.plan_id, session_id=session_id,
-                        preferred=decision.next_objective_id,
-                        fallback_text=spoken,
+                        preferred=preferred.id if switch_requested and preferred is not None else "",
+                        # 超预算让位时排除本目标，避免份额最低时又选回自己；
+                        # 只剩本目标时 _next_pending 会照常返回，保证题被问完。
+                        exclude=objective.id if defer_for_budget else "",
+                        # 仅接受明确指向另一个有效项目目标的新问题；被拒绝的追问不能换标签入库。
+                        fallback_text=(spoken if switch_requested and preferred is not None
+                                       and preferred.source == "project"
+                                       and progress.state(preferred.id).asked == 0
+                                       and not repeated else ""),
                     )
                     if picked is None:
                         self._finish(row, progress, "所有考察目标已完成，场次自动结束。")
                         action = "complete"
                     else:
                         plan, _ = picked
-                        await self._create_turn(row, progress, plan)
+                        created_turn = await self._create_turn(row, progress, plan)
+                        saved_question = created_turn.text
                         action = "switch" if plan.objective_id != objective.id else "continue"
 
                 answer_turn.decision_json = TurnDecision(
@@ -1047,6 +1080,7 @@ class InterviewService:
                 await self.session.flush()
         except StaleDataError:
             raise conflict() from None
+        return saved_question
 
     # ---------- 控制 ----------
 
@@ -1058,12 +1092,16 @@ class InterviewService:
             if row.revision != payload.expected_revision:
                 raise conflict()
             if row.status == "active":
+                progress = SessionProgress.model_validate(row.progress_json)
+                progress.paused_at = utc_now()
+                row.progress_json = progress.model_dump(mode="json")
                 row.status = "paused"
-                row.updated_at = utc_now()
+                row.updated_at = progress.paused_at
                 await self.session.flush()
             return self.read(row, await self.turns(session_id))
 
     async def resume(self, session_id: str, payload: SessionControl) -> SessionRead:
+        pending_opening: str | None = None
         async with self.session.begin():
             row = await self.require_session(session_id, lock=True)
             if row.status == "completed":
@@ -1071,12 +1109,29 @@ class InterviewService:
             if row.revision != payload.expected_revision:
                 raise conflict()
             if row.status == "paused":
+                progress = SessionProgress.model_validate(row.progress_json)
+                now = utc_now()
+                close_pause(progress, now, row.updated_at)
+                row.progress_json = progress.model_dump(mode="json")
                 row.status = "active"
                 row.error_code = None
                 row.error_message = None
-                row.updated_at = utc_now()
+                row.updated_at = now
                 await self.session.flush()
-            return self.read(row, await self.turns(session_id))
+            turns = await self.turns(session_id)
+            progress = SessionProgress.model_validate(row.progress_json)
+            pending_opening = next((turn.id for turn in turns
+                                    if turn.role == "candidate" and turn.decision_json is None
+                                    and turn.answers_turn_id in progress.opening_questions.values()), None)
+            result = self.read(row, turns)
+        # 恢复按钮是明确的继续操作；接续被暂停拦下的原介绍，不重存回答或重复推进。
+        if pending_opening is not None:
+            await self._run_decision(session_id, pending_opening, emit=None)
+            return await self.get(session_id)
+        if result.phase != "technical" and result.current_turn is None:
+            await self._ask_next(session_id)
+            return await self.get(session_id)
+        return result
 
     async def skip(self, session_id: str, payload: SessionControl) -> SessionRead:
         async with self.session.begin():
@@ -1091,11 +1146,14 @@ class InterviewService:
                 )
             turn = await self.session.get(InterviewTurn, row.current_turn_id)
             progress = SessionProgress.model_validate(row.progress_json)
+            if turn is not None and turn.id in progress.opening_questions.values():
+                progress.phase = "project_introduction" if progress.phase == "self_introduction" else "technical"
             if turn is not None and turn.objective_id:
                 try:
                     progress.state(turn.objective_id).status = "skipped"
                 except KeyError:
                     pass
+            settle_objectives(progress, self.elapsed(row, progress))
             row.current_turn_id = None
             row.progress_json = progress.model_dump(mode="json")
             row.updated_at = utc_now()
@@ -1111,12 +1169,8 @@ class InterviewService:
             if row.revision != payload.expected_revision:
                 raise conflict()
             progress = SessionProgress.model_validate(row.progress_json)
-            progress.completion_reason = "用户结束面试。"
+            self._finish(row, progress, "用户结束面试。")
             row.progress_json = progress.model_dump(mode="json")
-            row.status = "completed"
-            row.ended_at = utc_now()
-            row.current_turn_id = None
-            row.updated_at = row.ended_at
             await self.session.flush()
             return self.read(row, await self.turns(session_id))
 
@@ -1124,9 +1178,14 @@ class InterviewService:
 
     @staticmethod
     def _finish(row: InterviewSession, progress: SessionProgress, reason: str) -> None:
+        now = utc_now()
+        elapsed = active_seconds(row.started_at, row.ended_at, row.status, row.updated_at, progress, now=now)
+        settle_objectives(progress, elapsed)
+        if row.status == "paused":
+            close_pause(progress, now, row.updated_at)
         progress.completion_reason = reason
         row.status = "completed"
-        row.ended_at = utc_now()
+        row.ended_at = now
         row.current_turn_id = None
         row.updated_at = row.ended_at
 
@@ -1264,9 +1323,10 @@ class InterviewService:
     async def _next_turn(
         self, runtime: PlanRuntime, progress: SessionProgress, *,
         outline: SessionOutline, plan_id: str, session_id: str,
-        preferred: str = "", fallback_text: str = "",
+        preferred: str = "", fallback_text: str = "", exclude: str = "",
     ) -> tuple[NextTurn, ObjectiveProgress] | None:
         return await self.questions._next_turn(
             runtime, progress, outline=outline, plan_id=plan_id,
             session_id=session_id, preferred=preferred, fallback_text=fallback_text,
+            exclude=exclude,
         )

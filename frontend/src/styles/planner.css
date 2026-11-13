@@ -119,3 +119,11 @@
 :where(.planner-page) .practice-mode-choice strong { display: block; margin-bottom: 8px; color: #35432f; font-size: 15px; }
 :where(.planner-page) .practice-mode-choice span { display: block; font-size: 13px; line-height: 1.8; }
 @media (max-width: 560px) { :where(.planner-page) .practice-mode-choice { grid-template-columns: 1fr; } }
+
+:where(.planner-page) .plan-history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); }
+:where(.planner-page) .plan-list-delete { padding: 7px; border: 0; background: transparent; color: #a14f3d; font-size: 12px; cursor: pointer; }
+:where(.planner-page) .plan-list-delete:disabled { opacity: .45; cursor: not-allowed; }
+:where(.planner-page) .plan-record-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); color: #7b8677; font-size: 12px; }
+:where(.planner-page) .plan-list-pagination { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; color: #7b8677; }
+:where(.planner-page) .plan-list-pagination button { padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: white; color: inherit; cursor: pointer; }
+:where(.planner-page) .plan-list-pagination button:disabled { opacity: .45; cursor: not-allowed; }

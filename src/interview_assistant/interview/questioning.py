@@ -79,6 +79,7 @@ from interview_assistant.planner.text import plain_text
 from typing import TYPE_CHECKING
 
 from interview_assistant.interview.errors import InterviewError
+from interview_assistant.interview.timing import active_seconds, source_seconds
 
 if TYPE_CHECKING:
     from interview_assistant.interview.service import InterviewService
@@ -162,9 +163,15 @@ class QuestioningService:
             logger.info("Interview outline skipped; model not configured session_id=%s", session_id)
             return SessionOutline(source="fallback")
         model = QwenModel(self.owner.settings)
+        async with self.owner.session.begin():
+            row = await self.owner.require_session(session_id)
+            turns = await self.owner.turns(session_id)
+            introduction = self.owner.opening.context(
+                SessionProgress.model_validate(row.progress_json), turns,
+            )
         try:
             draft = await model.generate(
-                messages=outline_messages(runtime=runtime, objectives=targets),
+                messages=outline_messages(runtime=runtime, objectives=targets, introduction=introduction),
                 output_type=OutlineDraft,
                 prompt_version=OUTLINE_PROMPT_VERSION,
                 schema_version=OUTLINE_SCHEMA_VERSION,
@@ -178,7 +185,20 @@ class QuestioningService:
             return SessionOutline(source="fallback")
         assert isinstance(draft, OutlineDraft)
         known = {item.id for item in targets}
-        objectives = [item for item in draft.objectives if item.objective_id in known]
+        seen = {"".join(plain_text(item.text).split()).casefold()
+                for item in turns if item.role == "interviewer"}
+        objectives = []
+        for item in draft.objectives:
+            if item.objective_id not in known:
+                continue
+            questions = []
+            for question in item.questions:
+                key = "".join(plain_text(question.text).split()).casefold()
+                if key and key not in seen:
+                    seen.add(key)
+                    questions.append(question)
+            if questions:
+                objectives.append(item.model_copy(update={"questions": questions}))
         # 模型漏掉的目标用规则骨架补上：骨架必须「必命中」，
         # 否则开场白跑一次模型调用再为同一个目标补一次即时出题。
         covered = {item.objective_id for item in objectives}
@@ -199,9 +219,9 @@ class QuestioningService:
             facts = self._objective_facts(runtime, objective, seed=seed)
             questions = [
                 OutlineQuestion(
-                    text=rules.project_question(name, fact_type, content)[:300],
+                    text=rules.project_question(name, fact_type, content, topic=objective.topic, angle=index)[:300],
                 )
-                for name, fact_type, content in facts[:PROJECT_BASE_QUESTIONS]
+                for index, (name, fact_type, content) in enumerate(facts[:PROJECT_BASE_QUESTIONS])
             ]
             if questions:
                 objectives.append(OutlineObjective(
@@ -336,25 +356,43 @@ class QuestioningService:
         facts = self._objective_facts(runtime, objective, seed=seed)
         if not facts:
             return rules.objective_question(objective.topic)
-        index = (state.asked - state.followups) % len(facts)
+        base_index = state.asked - state.followups
+        index = base_index % len(facts)
         project_name, fact_type, content = facts[index]
-        return rules.project_question(project_name, fact_type, content)
+        return rules.project_question(project_name, fact_type, content, topic=objective.topic, angle=base_index)
 
     def _next_pending(
         self, runtime: PlanRuntime, progress: SessionProgress,
-        *, session_id: str, preferred: str = "",
+        *, session_id: str, preferred: str = "", exclude: str = "",
     ) -> tuple[PlanRuntimeObjective, ObjectiveProgress] | None:
-        if preferred:
-            objective = self._objective(runtime, preferred)
-            if objective is not None:
-                state = progress.state(objective.id)
-                if state.status in {"pending", "active"}:
-                    return objective, state
-        for objective in self._objective_order(runtime, session_id=session_id):
-            state = progress.state(objective.id)
-            if state.status in {"pending", "active"}:
-                return objective, state
-        return None
+        # 被预算调度暂存的目标可能已耗尽基础题；不能重新激活后无限回退出题。
+        # 追问在当前回答的决策中处理，这里只负责选择下一道基础题。
+        for item in runtime.objectives:
+            state = progress.state(item.id)
+            if state.status in {"pending", "active"} and self._base_remaining(item, state) == 0:
+                state.status = "covered"
+        candidates = [
+            item for item in self._objective_order(runtime, session_id=session_id)
+            if progress.state(item.id).status in {"pending", "active"}
+        ]
+        if exclude and len(candidates) > 1:
+            # 预算让位等场景排除当前目标；仅剩它时照常返回，保证题被问完。
+            candidates = [item for item in candidates if item.id != exclude]
+        if not candidates:
+            return None
+        elapsed = active_seconds(progress.started_at, None, "active", progress.started_at, progress)
+        spent = source_seconds(runtime, progress, elapsed)
+
+        def consumed_share(item: PlanRuntimeObjective) -> float:
+            return spent[item.source] / max(1, runtime.source_time_budget_sec.get(item.source, 0))
+
+        # 在目标边界优先补足相对预算消耗较少的题源；同题源仍按计划优先级和场次顺序。
+        # 只调顺序，不丢弃目标，不按到时强制结束，也不打断正在作答的问题。
+        minimum = min(consumed_share(item) for item in candidates)
+        selected = next((item for item in candidates if item.id == preferred and consumed_share(item) <= minimum), None)
+        if selected is None:
+            selected = min(candidates, key=consumed_share)
+        return selected, progress.state(selected.id)
 
     def _objective_order(
         self, runtime: PlanRuntime, *, session_id: str,
@@ -381,10 +419,12 @@ class QuestioningService:
         session_id: str,
         preferred: str = "",
         fallback_text: str = "",
+        exclude: str = "",
     ) -> tuple[NextTurn, ObjectiveProgress] | None:
-        """先试模型建议的目标，再按场次顺序推进；模型刚说的话优先于骨架。"""
+        """选择合法目标；模型措辞只用于明确指定的新项目目标。"""
         chosen = self._next_pending(
             runtime, progress, session_id=session_id, preferred=preferred,
+            exclude=exclude,
         )
         first = True
         while chosen is not None:
@@ -403,8 +443,7 @@ class QuestioningService:
                     text=snapshot.question_text,
                     question_id=str(snapshot.id), activate=True, advance_cursor=True,
                 ), state
-            # 模型本轮已经说出口的话必须原样落库，否则用户会看到文字被替换。
-            text = fallback_text if first and (not preferred or preferred == objective.id) else ""
+            text = fallback_text if first and preferred == objective.id else ""
             if not text:
                 text = self._outline_question(outline, objective, state)
             if not text:
