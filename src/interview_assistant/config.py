@@ -28,12 +28,14 @@ class Settings(BaseSettings):
     qwen_model: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_timeout_seconds: float = Field(default=120, ge=10, le=300)
+    # 简历提取与实时面试分开预算，避免为批处理延长实时等待。
+    qwen_resume_timeout_seconds: float = Field(default=240, ge=10, le=300)
     qwen_max_output_tokens: int = Field(default=8192, ge=1024, le=32768)
     qwen_enable_thinking: bool | None = False
     # DashScope 是国内直连服务：默认忽略系统/环境代理，避免本地代理把
     # 流式帧延迟放大数倍（首字从亚秒级拖到数秒）。确需走代理时再显式打开。
     qwen_trust_env: bool = False
-    # 只用于面试的判定与提问；资料抽取仍用供应商默认值，避免同一份资料抽出不同结果。
+    # 只用于面试的判定与提问；资料抽取单独使用 temperature=0。
     qwen_interview_temperature: float = Field(default=0.8, ge=0.0, le=1.5)
     ocr_model_dir: Path | None = None
 

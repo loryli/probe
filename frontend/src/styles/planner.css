@@ -109,3 +109,13 @@
 :where(.planner-page) .plan-failure dl div { display: grid; gap: 5px; }
 :where(.planner-page) .plan-failure dt { color: #9a9188; font-size: 11px; }
 :where(.planner-page) .plan-failure dd { margin: 0; color: #5e5a52; font-size: 11px; }
+
+:where(.planner-page) .plan-config { min-width: 0; margin: 0; padding: 0; border: 0; }
+:where(.planner-page) .pending-plan-note { margin-bottom: 20px; padding: 14px; border: 1px solid #e4dfc8; background: #faf9f1; color: #756843; font-size: 13px; line-height: 1.8; }
+
+:where(.planner-page) .practice-mode-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0 24px; }
+:where(.planner-page) .practice-mode-choice button { padding: 18px; border: 1px solid #dfe5d8; border-radius: 7px; background: white; color: #596651; text-align: left; cursor: pointer; }
+:where(.planner-page) .practice-mode-choice button.active { border-color: #889b66; background: #f3f6ed; }
+:where(.planner-page) .practice-mode-choice strong { display: block; margin-bottom: 8px; color: #35432f; font-size: 15px; }
+:where(.planner-page) .practice-mode-choice span { display: block; font-size: 13px; line-height: 1.8; }
+@media (max-width: 560px) { :where(.planner-page) .practice-mode-choice { grid-template-columns: 1fr; } }

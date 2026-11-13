@@ -54,11 +54,12 @@ def planner_payload(snapshot: PlanSnapshot, inputs: PlanInputs) -> dict[str, obj
         "max_objectives": objective_limit(inputs.duration_minutes),
         "required_sources": sources,
         "direction": inputs.direction or "大模型应用开发 / AI 全栈",
-        "resume": {"name": snapshot.resume_name[:80], "version": snapshot.source_version},
+        "resume": {"name": snapshot.resume_name[:80], "version": snapshot.source_version} if snapshot.resume_id else None,
         "projects": [
             {
                 "id": str(project.id),
                 "name": project.name[:80],
+                "summary": project.summary[:200],
                 "role": project.role[:80],
                 "tech_stack": project.tech_stack[:8],
                 "facts": [

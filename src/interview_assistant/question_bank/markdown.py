@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 ImportStrategy = Literal["auto", "heading_2", "heading_3", "qa"]
-PARSER_VERSION = "markdown-v1"
+PARSER_VERSION = "markdown-v2"
 MAX_FILE_BYTES = 1024 * 1024
 MAX_CANDIDATES = 500
 HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*)$")
@@ -165,6 +165,9 @@ def parse_markdown(content: str, strategy: ImportStrategy = "auto") -> ParsedMar
             answer_start = answer_marker[0] if answer_marker else end
         if not question_text.strip():
             warnings.append("题干为空，此段不能入库。")
+        # 标题或答案标记后的空行属于排版间隔，不作为答案正文的一部分。
+        while answer_start < section[-1].end and content[answer_start] in "\r\n":
+            answer_start += 1
         answer_text = content[answer_start : section[-1].end]
         if not answer_text.strip():
             warnings.append("未填写答案，不会自动补写。")

@@ -107,6 +107,7 @@ class DocumentRead(BaseModel):
     ocr_pages: list[int]
     page_methods: list[str]
     extraction_version: str
+    cache_hit: bool = False
 
 
 class TextFormatInput(InputModel):

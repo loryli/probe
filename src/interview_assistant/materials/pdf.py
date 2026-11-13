@@ -13,7 +13,11 @@ from interview_assistant.materials.schemas import MAX_TEXT_BYTES
 from interview_assistant.materials.text_layout import format_resume_text, layout_ocr_text
 
 OcrMode = Literal["auto", "force", "off"]
-EXTRACTION_VERSION = "pdf-v3-layout-rapidocr3.10-ppocrv6-180dpi"
+# v5：渲染 300 DPI + medium 检测模型，且引擎不再压缩整页（输入上限 3000→4200）。
+# 依据真实扫描件实测：v3 在流程图附近丢行并产生乱码（300 DPI + det-medium 修复）；
+# v4 又把 3508px 整页压到 3000px，导致灰色小字的技术栈主行整行漏检，
+# 放开压缩后恢复。单页约 38–50s（v3 约 9s）。识别模型维持 small：字符结果与 medium 一致但快一倍。
+EXTRACTION_VERSION = "pdf-v5-layout-rapidocr3.10-det-medium-300dpi-full"
 # PDFium 不允许不同线程并行调用；锁也保护复用的 OCR 引擎。
 _ocr_lock = Lock()
 logger = logging.getLogger(__name__)
@@ -33,14 +37,24 @@ class PdfText:
 def _engine(model_dir: str) -> Any:
     from rapidocr import EngineType, RapidOCR
 
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    return RapidOCR(params={
+    params: dict[str, Any] = {
         "Global.model_root_dir": model_dir,
         "Global.log_level": "error",
+        # 必须与下方 4200px 渲染上限一致：只要压缩整页，灰色小字（如技术栈行）就会跌破检测下限。
+        "Global.max_side_len": 4200,
         "Det.engine_type": EngineType.ONNXRUNTIME,
         "Cls.engine_type": EngineType.ONNXRUNTIME,
         "Rec.engine_type": EngineType.ONNXRUNTIME,
-    })
+    }
+    try:
+        from rapidocr.utils.typings import ModelType
+
+        params["Det.model_type"] = ModelType.MEDIUM
+    except ImportError:
+        # 旧版 rapidocr 无此枚举：退回默认检测模型，行为同 v3（仍保留 300 DPI 与输入上限放宽）。
+        pass
+    Path(model_dir).mkdir(parents=True, exist_ok=True)
+    return RapidOCR(params=params)
 
 
 def _ocr_error(error: Exception, stage: str) -> MaterialError:
@@ -101,7 +115,8 @@ def _recognize_page(content: bytes, index: int, model_dir: Path) -> tuple[str, b
                     width, height = page.get_size()
                     if min(width, height) <= 0:
                         raise ValueError("Invalid page dimensions")
-                    scale = min(180 / 72, 2600 / max(width, height))
+                    # 300 DPI 是对照实验中版面恢复的必要条件；4200px 上限防超大页面内存失控。
+                    scale = min(300 / 72, 4200 / max(width, height))
                     bitmap = page.render(scale=scale)
                     try:
                         # 默认 PDFium 位图为 BGR，与 RapidOCR 的 numpy 输入一致。

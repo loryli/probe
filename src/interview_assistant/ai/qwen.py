@@ -1,6 +1,7 @@
 """Qwen Chat Completions 适配器：单次/流式调用、限时、JSON 校验与脱敏错误。"""
 
 import asyncio
+import codecs
 import json
 import logging
 import time
@@ -63,8 +64,11 @@ class QwenModel:
         self, *, messages: Sequence[ModelMessage], output_type: type[OutputModel],
         prompt_version: str, schema_version: str, temperature: float | None = None,
         max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+        enable_thinking: bool | None = None,
     ) -> OutputModel:
         settings = self.settings
+        timeout = timeout_seconds if timeout_seconds is not None else settings.qwen_timeout_seconds
         if not configuration_status(settings)["configured"]:
             raise ModelError("model_not_configured", "请先在本地 .env 配置 Qwen API Key 和模型名称")
         assert settings.qwen_api_key is not None
@@ -77,16 +81,18 @@ class QwenModel:
             "max_tokens": max_tokens or settings.qwen_max_output_tokens,
             "stream": False,
         }
-        if settings.qwen_enable_thinking is not None:
-            payload["enable_thinking"] = settings.qwen_enable_thinking
+        thinking = settings.qwen_enable_thinking if enable_thinking is None else enable_thinking
+        if thinking is not None:
+            payload["enable_thinking"] = thinking
         if temperature is not None:
-            # 面试需要同题不同措辞；抽取类调用不传，保持供应商默认行为。
             payload["temperature"] = temperature
         started = time.monotonic()
+        response_started = False
+        received_bytes = 0
         try:
-            async with asyncio.timeout(settings.qwen_timeout_seconds):
+            async with asyncio.timeout(timeout):
                 async with httpx2.AsyncClient(
-                    timeout=httpx2.Timeout(settings.qwen_timeout_seconds, connect=10),
+                    timeout=httpx2.Timeout(timeout, connect=10),
                     follow_redirects=False,
                     trust_env=settings.qwen_trust_env,
                 ) as client:
@@ -94,12 +100,14 @@ class QwenModel:
                         "POST", settings.qwen_base_url + "/chat/completions", json=payload,
                         headers={"Authorization": "Bearer " + settings.qwen_api_key.get_secret_value().strip()},
                     ) as response:
+                        response_started = True
                         if response.status_code >= 400:
                             logger.warning("Qwen request rejected; status=%d", response.status_code)
                         _raise_for_status(response.status_code)
                         raw = bytearray()
                         async for chunk in response.aiter_bytes():
                             raw.extend(chunk)
+                            received_bytes += len(chunk)
                             if len(raw) > 4 * 1024 * 1024:
                                 raise ModelError("model_response_too_large", "模型返回过大，请精简简历或减少提取内容")
             data = json.loads(raw)
@@ -126,8 +134,18 @@ class QwenModel:
             return output_type.model_validate_json(content)
         except ModelError:
             raise
-        except (TimeoutError, httpx2.TimeoutException):
-            raise ModelError("model_timeout", "Qwen 调用超时，本次未写入项目；可稍后重新提取") from None
+        except (TimeoutError, httpx2.TimeoutException) as failure:
+            # 仅记录阶段、时长和字节数，不记录密钥、请求或响应正文。
+            logger.warning(
+                "Qwen timeout; phase=%s error_type=%s elapsed_ms=%d received_bytes=%d",
+                "response_body" if response_started else "waiting_response",
+                type(failure).__name__, round((time.monotonic() - started) * 1000), received_bytes,
+            )
+            if type(failure).__name__ == "ConnectTimeout":
+                message = "连接 Qwen 超时，请检查网络、接口地域及代理配置；本次不会自动重试"
+            else:
+                message = f"Qwen 未在 {timeout:.0f} 秒内返回完整结果；本次不会自动重试"
+            raise ModelError("model_timeout", message) from None
         except httpx2.HTTPError:
             raise ModelError("model_connection_failed", "无法连接 Qwen，请检查网络及接口地址") from None
         except (ValueError, ValidationError):
@@ -141,6 +159,8 @@ class QwenModel:
         self, *, messages: Sequence[ModelMessage], output_type: type[OutputModel],
         prompt_version: str, schema_version: str, temperature: float | None = None,
         max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+        enable_thinking: bool | None = None,
     ) -> AsyncIterator[str]:
         """流式调用：逐段吐出模型正文，结束后把校验结果放在 self.result。
 
@@ -148,6 +168,7 @@ class QwenModel:
         仍然抛 ModelError，由调用方决定丢弃已展示的文本并提示重试。
         """
         settings = self.settings
+        timeout = timeout_seconds if timeout_seconds is not None else settings.qwen_timeout_seconds
         if not configuration_status(settings)["configured"]:
             raise ModelError("model_not_configured", "请先在本地 .env 配置 Qwen API Key 和模型名称")
         assert settings.qwen_api_key is not None
@@ -162,8 +183,9 @@ class QwenModel:
             # 最后一帧附带 token 用量；否则流式响应不返回 usage，落库统计为空。
             "stream_options": {"include_usage": True},
         }
-        if settings.qwen_enable_thinking is not None:
-            payload["enable_thinking"] = settings.qwen_enable_thinking
+        thinking = settings.qwen_enable_thinking if enable_thinking is None else enable_thinking
+        if thinking is not None:
+            payload["enable_thinking"] = thinking
         if temperature is not None:
             payload["temperature"] = temperature
         started = time.monotonic()
@@ -171,10 +193,12 @@ class QwenModel:
         self.finish_reason = None
         raw = bytearray()
         buffer = ""
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        stream_done = False
         try:
-            async with asyncio.timeout(settings.qwen_timeout_seconds):
+            async with asyncio.timeout(timeout):
                 async with httpx2.AsyncClient(
-                    timeout=httpx2.Timeout(settings.qwen_timeout_seconds, connect=10),
+                    timeout=httpx2.Timeout(timeout, connect=10),
                     follow_redirects=False,
                     trust_env=settings.qwen_trust_env,
                 ) as client:
@@ -186,7 +210,9 @@ class QwenModel:
                         async for chunk in response.aiter_bytes():
                             if not chunk:
                                 continue
-                            buffer += chunk.decode("utf-8", errors="ignore")
+                            # HTTP 分块可以截在中文 UTF-8 字符中间；逐块 ignore 会吞字，
+                            # 进而破坏题目、回答反馈和最终 JSON。保留半个字符到下一块。
+                            buffer += decoder.decode(chunk)
                             # 供应商的 SSE 帧以空行分隔；半帧留在 buffer 里等下一次。
                             while "\n" in buffer:
                                 line, buffer = buffer.split("\n", 1)
@@ -197,7 +223,8 @@ class QwenModel:
                                     continue
                                 data = line[5:].strip()
                                 if data == "[DONE]":
-                                    continue
+                                    stream_done = True
+                                    break
                                 try:
                                     frame = json.loads(data)
                                 except ValueError:
@@ -233,19 +260,27 @@ class QwenModel:
                                     raise ModelError(
                                         "model_response_too_large", "模型返回过长，已中止本次生成",
                                     )
+                            if stream_done:
+                                break
             if self.finish_reason == "length":
                 raise ModelError(
                     "model_output_truncated",
                     "模型输出被截断，请精简资料或调整 INTERVIEW_QWEN_MAX_OUTPUT_TOKENS",
                 )
+            if self.finish_reason != "stop":
+                raise ModelError("model_output_incomplete", "模型响应提前结束，未保存不完整结果")
             content = raw.decode("utf-8", errors="ignore").strip()
             if not content:
                 raise ValueError("Missing JSON content")
             self.result = output_type.model_validate_json(content)
         except ModelError:
             raise
-        except (TimeoutError, httpx2.TimeoutException):
-            raise ModelError("model_timeout", "Qwen 调用超时，本步未写入；可点「重试下一步」") from None
+        except (TimeoutError, httpx2.TimeoutException) as failure:
+            if type(failure).__name__ == "ConnectTimeout":
+                detail = "建立连接超时，请检查网络、接口地域及代理配置"
+            else:
+                detail = "已收到部分正文但未完整结束" if raw else "尚未收到模型正文"
+            raise ModelError("model_timeout", f"Qwen 调用超时（上限 {timeout:.0f} 秒，{detail}）；不会自动重试") from None
         except httpx2.HTTPError:
             raise ModelError("model_connection_failed", "无法连接 Qwen，请检查网络及接口地址") from None
         except (ValueError, ValidationError):

@@ -161,3 +161,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto!important; animation-duration: .01ms!important; animation-iteration-count: 1!important; transition-duration: .01ms!important; }
 }
+
+/* 状态恢复保留未提交输入，复盘证据可定位到真实对话。 */
+.interview-page .preserved-answer, .interview-page .paused-prompt { margin: 12px 0; padding: 14px; border: 1px solid #e3ddc5; border-radius: 7px; background: #faf9f2; color: #6c6246; font-size: 12px; line-height: 1.8; }
+.interview-page .preserved-answer pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.interview-page .preserved-answer summary { cursor: pointer; }
+.interview-page .evidence-links button { margin-left: 6px; border: 0; background: none; color: #536d36; text-decoration: underline; cursor: pointer; }
+.interview-page .turn-row:focus { outline: 2px solid #9aaa78; outline-offset: 8px; }

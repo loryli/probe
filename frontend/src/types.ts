@@ -37,6 +37,7 @@ export interface ObjectiveState {
 }
 
 export interface InterviewSession {
+  practice_mode: 'question_bank' | 'resume'
   id: string
   plan_id: string
   plan_revision: number
@@ -83,6 +84,7 @@ export interface SessionSummary {
 
 export interface SessionOptions {
   plans: Array<{
+    practice_mode: 'question_bank' | 'resume'
     id: string
     direction: string
     duration_minutes: number

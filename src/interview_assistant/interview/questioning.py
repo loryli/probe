@@ -400,7 +400,7 @@ class QuestioningService:
                     continue
                 return NextTurn(
                     objective_id=objective.id, source="question_bank",
-                    text=plain_text(snapshot.question_text)[:400],
+                    text=snapshot.question_text,
                     question_id=str(snapshot.id), activate=True, advance_cursor=True,
                 ), state
             # 模型本轮已经说出口的话必须原样落库，否则用户会看到文字被替换。

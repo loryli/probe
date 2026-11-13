@@ -24,8 +24,8 @@ class InputModel(BaseModel):
 
 class PlanInputs(InputModel):
     mode: Literal["model", "rule"] = "model"
-    resume_id: UUID
-    source_version: int = Field(ge=1)
+    resume_id: UUID | None = None
+    source_version: int | None = Field(default=None, ge=1)
     project_ids: list[UUID] = Field(default_factory=list, max_length=MAX_PROJECTS)
     question_ids: list[UUID] = Field(default_factory=list, max_length=MAX_QUESTIONS)
     direction: str = Field(default="", max_length=500)
@@ -49,6 +49,21 @@ class PlanInputs(InputModel):
     def clean_direction(cls, value: str) -> str:
         return value.strip()
 
+    @model_validator(mode="after")
+    def validate_material_mode(self) -> "PlanInputs":
+        if self.resume_id is None:
+            if self.source_version is not None or self.project_ids:
+                raise ValueError("纯题库练习不绑定简历版本或项目")
+            if not self.question_ids:
+                raise ValueError("纯题库练习请至少选择一道题目")
+            self.project_ratio = 0
+            self.max_total_followups = 0
+            if not self.direction:
+                self.direction = "题库练习"
+        elif self.source_version is None:
+            raise ValueError("使用简历时必须选择具体版本")
+        return self
+
 
 class PlanCreate(PlanInputs):
     request_id: UUID = Field(description="本次规划的 UUID；超时重试复用，不重复调用模型")
@@ -70,6 +85,8 @@ class SnapshotProject(InputModel):
     id: UUID
     revision: int | None = None
     name: str
+    summary: str = ""
+    duration: str = ""
     role: str
     tech_stack: list[str]
     facts: list[SnapshotFact]
@@ -87,9 +104,9 @@ class PlanSnapshot(InputModel):
     """生成时固定的资料版本；确认计划时据此复核引用是否仍然有效。"""
 
     snapshot_version: Literal[1, 2] = 1
-    resume_id: UUID
+    resume_id: UUID | None = None
     resume_name: str
-    source_version: int
+    source_version: int | None = None
     content_sha256: str
     projects: list[SnapshotProject]
     questions: list[SnapshotQuestion]
@@ -319,8 +336,8 @@ class PlanRuntime(BaseModel):
     plan_revision: int
     status: str
     confirmed_at: datetime | None
-    resume_id: UUID
-    source_version: int
+    resume_id: UUID | None
+    source_version: int | None
     schema_version: str
     prompt_version: str
     direction: str
@@ -336,8 +353,8 @@ class PlanRuntime(BaseModel):
 
 class PlanRead(BaseModel):
     id: UUID
-    resume_id: UUID
-    source_version: int
+    resume_id: UUID | None
+    source_version: int | None
     status: str
     revision: int
     provider: str
@@ -361,8 +378,8 @@ class PlanSummary(BaseModel):
     id: UUID
     status: str
     provider: str
-    resume_id: UUID
-    source_version: int
+    resume_id: UUID | None
+    source_version: int | None
     direction: str
     duration_minutes: int
     objective_count: int

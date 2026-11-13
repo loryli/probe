@@ -15,6 +15,7 @@ export function useInterview() {
   const selectedPlan = ref('')
   const mode = ref<'model' | 'rule'>('model')
   const answer = ref('')
+  const preservedAnswer = ref<{ text: string; question: string } | null>(null)
   const liveText = ref('')
   const phase = ref<InterviewPhase>('idle')
   const pageBusy = ref(false)
@@ -28,15 +29,41 @@ export function useInterview() {
   const pendingAnswer = ref<{ turnId: string; text: string; requestId: string } | null>(null)
   const pendingReportRequest = ref<{ sessionId: string; requestId: string } | null>(null)
   let recoveryTimer: number | undefined
+  let recoveryDeadline = 0
+  let recoveryKey = ''
+  let readGeneration = 0
+  let mutationGeneration = 0
+  let disposed = false
 
   const sessionId = computed(() => typeof route.params.sessionId === 'string' ? route.params.sessionId : '')
   const currentQuestion = computed(() => session.value?.current_turn ?? null)
-  const isLocked = computed(() => ['saving', 'streaming', 'recovering', 'control'].includes(phase.value))
-  const canAnswer = computed(() => session.value?.status === 'active' && !!currentQuestion.value && !isLocked.value)
+  const isLocked = computed(() => ['loading', 'saving', 'streaming', 'recovering', 'control', 'report'].includes(phase.value))
+  const canAnswer = computed(() => session.value?.id === sessionId.value && session.value?.status === 'active' && !!currentQuestion.value && !isLocked.value)
   const availablePlans = computed(() => options.value?.plans.filter((plan) => plan.usable) ?? [])
 
   function confirmDiscard() {
-    return !answer.value.trim() || window.confirm('当前回答还没有提交。离开会放弃这段草稿，仍要继续吗？')
+    return (!answer.value.trim() && !preservedAnswer.value) || window.confirm('当前有未提交的回答草稿。离开会放弃草稿，仍要继续吗？')
+  }
+
+  function applySession(next: InterviewSession) {
+    const previous = session.value
+    if (previous?.id === next.id && next.revision < previous.revision) return
+    if (previous?.id !== next.id) {
+      answer.value = ''; preservedAnswer.value = null; report.value = null; liveText.value = ''
+    } else if (previous?.current_turn && previous.current_turn.id !== next.current_turn?.id && answer.value.trim()) {
+      const sequence = previous.current_turn.sequence
+      const saved = next.turns.some((turn) => turn.role === 'candidate'
+        && turn.sequence > sequence && turn.text === answer.value.trim())
+      if (!saved) preservedAnswer.value = { text: answer.value, question: previous.current_turn.text }
+      answer.value = ''
+    }
+    session.value = next
+  }
+  function restoreAnswer() {
+    if (!preservedAnswer.value || !canAnswer.value) return
+    if (answer.value.trim() && !window.confirm('用保留草稿替换当前编辑内容？')) return
+    answer.value = preservedAnswer.value.text
+    preservedAnswer.value = null
   }
 
   function closeStream() {
@@ -47,51 +74,69 @@ export function useInterview() {
 
   async function loadSession(id: string, recover = false) {
     if (!id) return
+    const token = ++readGeneration
     if (recover) phase.value = 'recovering'
     try {
-      session.value = await interviewApi.get(id)
-      if (session.value.current_turn) answer.value = ''
-      if (session.value.status === 'active' && !session.value.current_turn && session.value.pending_turn_id) {
+      const next = await interviewApi.get(id)
+      if (disposed || token !== readGeneration || sessionId.value !== id) return
+      applySession(next)
+      if (next.status === 'active' && !next.current_turn && next.pending_turn_id && !next.error_code) {
         phase.value = 'streaming'
         attachEvents(id)
       } else if (phase.value === 'recovering' || phase.value === 'loading') {
         phase.value = 'idle'
       }
-      if (session.value.status === 'completed') await loadReport(id)
+      if (next.status === 'completed') await loadReport(id)
     } catch (cause) {
+      if (token !== readGeneration || sessionId.value !== id) return
       error.value = cause instanceof Error ? cause.message : '读取本场失败。'
       if (phase.value === 'recovering') phase.value = 'idle'
     }
   }
 
   function attachEvents(id: string) {
+    if (disposed || sessionId.value !== id) return
     closeStream()
+    const key = `${id}:${session.value?.pending_turn_id ?? 'opening'}`
+    if (recoveryKey !== key) { recoveryKey = key; recoveryDeadline = Date.now() + 360_000 }
+    if (Date.now() >= recoveryDeadline) {
+      phase.value = 'idle'
+      error.value = '等待下一步已超过六分钟。回答已保存；请读取本场状态，确认后台调用结束后再重试。'
+      return
+    }
     const source = interviewApi.events(id)
     stream.value = source
     source.addEventListener('state', (event) => {
+      if (stream.value !== source || sessionId.value !== id) return
       const next = JSON.parse((event as MessageEvent<string>).data) as InterviewSession
-      session.value = next
+      applySession(next)
       if (next.current_turn || next.status !== 'active' || next.error_code) {
         closeStream()
+        liveText.value = ''; notice.value = ''; recoveryKey = ''
         phase.value = 'idle'
+        if (next.status === 'completed') void loadReport(id)
       }
     })
-    source.addEventListener('error', () => {
-      if (source.readyState === EventSource.CLOSED) {
-        closeStream()
-        recoveryTimer = window.setTimeout(() => void loadSession(id, true), 600)
+    source.addEventListener('error', (event) => {
+      if (stream.value !== source || sessionId.value !== id) return
+      closeStream()
+      if (event instanceof MessageEvent && event.data) {
+        const failure = JSON.parse(event.data) as { message?: string }
+        error.value = failure.message || '读取场次状态失败。'
+        phase.value = 'idle'
+      } else {
+        // 包括 CONNECTING；关闭浏览器的无限自动重连，先 GET 核对数据库状态。
+        recoveryTimer = window.setTimeout(() => void loadSession(id, true), 1_500)
       }
     })
   }
 
   async function refresh() {
-    if (!sessionId.value) return
+    if (!sessionId.value || ['saving', 'control', 'loading', 'report'].includes(phase.value)) return
+    ++mutationGeneration
+    closeStream(); recoveryKey = ''; error.value = ''
     phase.value = 'recovering'
     await loadSession(sessionId.value, true)
-    if (session.value?.status === 'active' && !session.value.current_turn && session.value.pending_turn_id) {
-      phase.value = 'streaming'
-      attachEvents(sessionId.value)
-    }
   }
 
   async function initialize() {
@@ -100,6 +145,7 @@ export function useInterview() {
     try {
       const [nextOptions, page] = await Promise.all([interviewApi.options(), interviewApi.list()])
       options.value = nextOptions
+      mode.value = nextOptions.model.configured ? 'model' : 'rule'
       sessions.value = page.items
       const requestedPlan = typeof route.query.plan === 'string' ? route.query.plan : ''
       selectedPlan.value = availablePlans.value.some((plan) => plan.id === requestedPlan)
@@ -108,7 +154,6 @@ export function useInterview() {
       if (sessionId.value) {
         phase.value = 'loading'
         await loadSession(sessionId.value)
-        if (session.value?.status === 'completed') await loadReport(sessionId.value)
       }
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : '加载练习场失败。'
@@ -118,7 +163,7 @@ export function useInterview() {
   }
 
   async function start() {
-    if (!selectedPlan.value) return
+    if (!selectedPlan.value || pageBusy.value || isLocked.value) return
     pageBusy.value = true
     error.value = ''
     notice.value = ''
@@ -130,12 +175,14 @@ export function useInterview() {
       pendingStart.value = { signature, requestId }
     }
     try {
-      session.value = await interviewApi.create(selectedPlan.value, mode.value, requestId)
+      const created = await interviewApi.create(selectedPlan.value, mode.value, requestId)
+      if (disposed) return
+      session.value = created
       pendingStart.value = null
       answer.value = ''
       await router.push(`/interviews/${session.value.id}`)
       sessions.value = (await interviewApi.list()).items
-      if (!session.value.current_turn && session.value.status === 'active') {
+      if (!session.value.current_turn && session.value.status === 'active' && !session.value.error_code) {
         phase.value = 'streaming'
         attachEvents(session.value.id)
       } else phase.value = 'idle'
@@ -151,6 +198,7 @@ export function useInterview() {
     const active = session.value
     const text = answer.value.trim()
     if (!active || !active.current_turn || !text || !canAnswer.value) return
+    const token = ++mutationGeneration
     error.value = ''
     notice.value = ''
     liveText.value = ''
@@ -169,84 +217,96 @@ export function useInterview() {
         text,
         requestId,
         (ack) => {
+          if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
           pendingAnswer.value = null
           session.value = ack
           answer.value = ''
           phase.value = 'streaming'
           notice.value = '回答已保存，面试官正在组织下一步。'
         },
-        (delta) => { liveText.value += delta },
+        (delta) => { if (!disposed && token === mutationGeneration && sessionId.value === active.id) liveText.value += delta },
       )
-      session.value = finalState
+      if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
+      applySession(finalState)
       liveText.value = ''
       phase.value = 'idle'
       notice.value = ''
       if (finalState.status === 'completed') await loadReport(finalState.id)
       sessions.value = (await interviewApi.list()).items
     } catch (cause) {
+      if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
       const message = cause instanceof ApiError ? cause.message : '连接中断，请读取本场状态。'
       error.value = message
       phase.value = 'recovering'
       await loadSession(active.id, true)
-      if (session.value?.pending_turn_id && !session.value.current_turn && session.value.status === 'active') {
-        attachEvents(active.id)
-      } else phase.value = 'idle'
     }
   }
 
   async function retry() {
-    if (!session.value) return
+    if (!session.value || isLocked.value) return
+    if (!session.value.error_code && !window.confirm('下一步状态尚未确认。继续生成可能调用模型；若原请求仍在运行，请先读取本场状态。确认继续？')) return
+    const id = session.value.id
+    const token = ++mutationGeneration
     phase.value = 'loading'
     error.value = ''
     try {
-      session.value = await interviewApi.retry(session.value.id)
-      if (!session.value.current_turn && session.value.status === 'active') {
+      const next = await interviewApi.retry(id)
+      if (disposed || token !== mutationGeneration || sessionId.value !== id) return
+      applySession(next)
+      if (!session.value.current_turn && session.value.status === 'active' && !session.value.error_code) {
         phase.value = 'streaming'
         attachEvents(session.value.id)
       } else phase.value = 'idle'
     } catch (cause) {
+      if (disposed || token !== mutationGeneration || sessionId.value !== id) return
       error.value = cause instanceof Error ? cause.message : '继续生成失败。'
       phase.value = 'idle'
     }
   }
 
   async function control(action: 'pause' | 'resume' | 'skip' | 'end') {
-    if (!session.value || phase.value === 'control') return
+    if (!session.value || session.value.id !== sessionId.value || isLocked.value) return
     const labels = { pause: '暂停本场？', resume: '继续本场？', skip: '跳过当前考察目标并生成下一步？', end: '结束本场？已保存的问答会保留。' }
     if (['skip', 'end'].includes(action) && !window.confirm(labels[action])) return
     const active = session.value
+    const token = ++mutationGeneration
     phase.value = 'control'
     error.value = ''
     try {
-      session.value = await interviewApi.control(active.id, action, active.revision)
+      const next = await interviewApi.control(active.id, action, active.revision)
+      if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
+      applySession(next)
       liveText.value = ''
-      if (action === 'resume' && !session.value.current_turn && session.value.status === 'active') {
+      if (action === 'resume' && !session.value.current_turn && session.value.status === 'active' && !session.value.error_code) {
         phase.value = 'streaming'
         attachEvents(active.id)
       } else phase.value = 'idle'
       if (session.value.status === 'completed') await loadReport(active.id)
       sessions.value = (await interviewApi.list()).items
     } catch (cause) {
+      if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
       error.value = cause instanceof Error ? cause.message : '控制操作未完成。'
       await loadSession(active.id, true)
-      phase.value = 'idle'
     }
   }
 
   async function loadReport(id: string) {
     reportBusy.value = true
     try {
-      report.value = await interviewApi.report(id)
+      const next = await interviewApi.report(id)
+      if (session.value?.id === id) report.value = next
     } catch (cause) {
+      if (session.value?.id !== id) return
       report.value = null
       if (cause instanceof ApiError && cause.status !== 404) error.value = cause.message
     } finally {
-      reportBusy.value = false
+      if (session.value?.id === id) reportBusy.value = false
     }
   }
 
   async function generateReport() {
-    if (!session.value) return
+    if (!session.value || session.value.status !== 'completed' || reportBusy.value) return
+    const id = session.value.id
     reportBusy.value = true
     phase.value = 'report'
     error.value = ''
@@ -258,22 +318,26 @@ export function useInterview() {
       pendingReportRequest.value = { sessionId: session.value.id, requestId }
     }
     try {
-      report.value = await interviewApi.createReport(session.value.id, requestId)
+      const next = await interviewApi.createReport(id, requestId)
+      if (sessionId.value !== id) return
+      report.value = next
       pendingReportRequest.value = null
     } catch (cause) {
+      if (sessionId.value !== id) return
       error.value = cause instanceof Error ? cause.message : '复盘生成失败。'
     } finally {
-      reportBusy.value = false
-      phase.value = 'idle'
+      if (sessionId.value === id) { reportBusy.value = false; phase.value = 'idle' }
     }
   }
 
   function newSession() {
+    if (pageBusy.value) return
     if (!confirmDiscard()) return
     closeStream()
     session.value = null
     report.value = null
     answer.value = ''
+    preservedAnswer.value = null
     liveText.value = ''
     error.value = ''
     notice.value = ''
@@ -305,6 +369,7 @@ export function useInterview() {
         // 先清空草稿，避免路由守卫再次要求确认放弃。
         closeStream()
         answer.value = ''
+        preservedAnswer.value = null
         liveText.value = ''
         session.value = null
         report.value = null
@@ -329,28 +394,36 @@ export function useInterview() {
     if (!confirmDiscard()) return false
   })
   function protectDraft(event: BeforeUnloadEvent) {
-    if (!answer.value.trim()) return
+    if (!answer.value.trim() && !preservedAnswer.value) return
     event.preventDefault()
     event.returnValue = ''
   }
   window.addEventListener('beforeunload', protectDraft)
 
   watch(sessionId, async (id) => {
-    if (id && id !== session.value?.id) await loadSession(id, true)
+    ++mutationGeneration
+    ++readGeneration
+    closeStream(); recoveryKey = ''; reportBusy.value = false; liveText.value = ''
+    if (id && id !== session.value?.id) {
+      session.value = null; report.value = null; answer.value = ''; preservedAnswer.value = null
+      await loadSession(id, true)
+    }
     else if (!id) {
       closeStream()
       session.value = null
       report.value = null
+      answer.value = ''; preservedAnswer.value = null
       phase.value = 'idle'
     }
   })
   onBeforeUnmount(() => {
+    disposed = true; ++mutationGeneration; ++readGeneration
     closeStream()
     window.removeEventListener('beforeunload', protectDraft)
   })
 
   return {
-    options, sessions, session, report, selectedPlan, mode, answer, liveText, phase,
+    options, sessions, session, report, selectedPlan, mode, answer, preservedAnswer, restoreAnswer, liveText, phase,
     pageBusy, reportBusy, deleteBusy, checkedSessionIds, error, notice, sessionId,
     currentQuestion, isLocked, canAnswer,
     availablePlans, initialize, start, submitAnswer, retry, control, refresh,

@@ -88,7 +88,8 @@ class Database:
             migration_config.attributes["connection"] = connection
             command.upgrade(migration_config, "head")
 
-        async with self.engine.begin() as connection:
+        # 迁移环境自行管理事务；SQLite 重建被场次引用的计划表前需在事务外设置外键策略。
+        async with self.engine.connect() as connection:
             await connection.run_sync(upgrade)
 
     async def ping(self) -> None:

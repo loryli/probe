@@ -11,12 +11,15 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from interview_assistant.ai.qwen import ModelError, QwenModel, configuration_status
 from interview_assistant.config import Settings
-from interview_assistant.database import utc_now
+from interview_assistant.database import Database, utc_now
 from interview_assistant.materials.errors import MaterialError
+from interview_assistant.materials.extraction import (
+    RULE_PROMPT_VERSION, local_candidates, resolve_references, with_quality_warnings,
+)
 from interview_assistant.materials.models import Project, ResumeParseDraft
-from interview_assistant.materials.parse_prompt import PROMPT_VERSION, SCHEMA_VERSION, messages
+from interview_assistant.materials.parse_prompt import MODEL_SCHEMA_VERSION, PROMPT_VERSION, SCHEMA_VERSION, messages
 from interview_assistant.materials.parse_schemas import (
-    ParseConfirm, ParseCreate, ParseDraftList, ParseDraftRead, ResumeParseOutput,
+    ParseConfirm, ParseCreate, ParseDraftList, ParseDraftRead, ReferencedResumeOutput, ResumeParseOutput,
 )
 from interview_assistant.materials.schemas import ProjectRead
 from interview_assistant.materials.service import MaterialService, conflict, original_quote
@@ -54,7 +57,31 @@ def ground_result(output: ResumeParseOutput, source: str) -> ResumeParseOutput:
         projects.append(project)
     result.projects = projects
     result.needs_confirmation = warnings[:50]
-    return result
+    return with_quality_warnings(result)
+
+
+async def run_parse_draft(
+    database: Database, settings: Settings, resume_id: str, draft_id: str,
+) -> None:
+    """后台执行一次模型提取：独立会话，异常也写回 failed，避免草稿永远停在 running。"""
+    try:
+        async with database.sessions() as session:
+            await ResumeParser(session, settings).run(resume_id, draft_id)
+    except Exception:
+        # 不记录异常正文：供应商或校验异常中可能包含上传资料。
+        logger.error("Resume parse task failed; draft_id=%s", draft_id)
+        try:
+            async with database.sessions() as session:
+                parser = ResumeParser(session, settings)
+                async with session.begin():
+                    row = await parser.require_draft(resume_id, draft_id, lock=True)
+                    if row.status == "running":
+                        row.status = "failed"
+                        row.error_code = "parse_task_failed"
+                        row.error_message = "提取任务异常结束，未自动重试模型调用；可重新发起一次提取"
+                        await session.flush()
+        except Exception:
+            logger.error("Resume parse failure not recorded; draft_id=%s", draft_id)
 
 
 class ResumeParser:
@@ -83,12 +110,13 @@ class ResumeParser:
     def read(row: ResumeParseDraft) -> ParseDraftRead:
         return ParseDraftRead(
             id=row.id, resume_id=row.resume_id, source_version=row.source_version,
-            status=row.status, revision=row.revision, model=row.model,
+            status=row.status, revision=row.revision, model=row.model, provider=row.provider,
             prompt_version=row.prompt_version, schema_version=row.schema_version,
-            result=ResumeParseOutput.model_validate(row.result_json) if row.result_json else None,
+            result=with_quality_warnings(ResumeParseOutput.model_validate(row.result_json)) if row.result_json else None,
             confirmed_projects={key: value["project_id"] for key, value in row.confirmed_projects_json.items()},
             error_code=row.error_code, error_message=row.error_message, elapsed_ms=row.elapsed_ms,
             input_tokens=row.input_tokens, output_tokens=row.output_tokens, created_at=row.created_at,
+            expires_at=row.expires_at,
         )
 
     async def get(self, resume_id: str, draft_id: str) -> ParseDraftRead:
@@ -102,16 +130,20 @@ class ResumeParser:
         except StaleDataError:
             raise conflict() from None
 
-    async def list_drafts(self, resume_id: str, limit: int, offset: int) -> ParseDraftList:
+    async def list_drafts(
+        self, resume_id: str, limit: int, offset: int, source_version: int | None = None,
+    ) -> ParseDraftList:
         try:
             async with self.session.begin():
                 await self.materials.require_resume(resume_id)
-                total = await self.session.scalar(select(func.count()).select_from(ResumeParseDraft).where(
-                    ResumeParseDraft.resume_id == resume_id
-                ))
-                rows = list(await self.session.scalars(select(ResumeParseDraft).where(
-                    ResumeParseDraft.resume_id == resume_id
-                ).order_by(ResumeParseDraft.created_at.desc(), ResumeParseDraft.id).limit(limit).offset(offset)))
+                conditions = [ResumeParseDraft.resume_id == resume_id]
+                if source_version is not None:
+                    conditions.append(ResumeParseDraft.source_version == source_version)
+                total = await self.session.scalar(
+                    select(func.count()).select_from(ResumeParseDraft).where(*conditions)
+                )
+                rows = list(await self.session.scalars(select(ResumeParseDraft).where(*conditions)
+                    .order_by(ResumeParseDraft.created_at.desc(), ResumeParseDraft.id).limit(limit).offset(offset)))
                 for row in rows:
                     self.expire(row)
                 await self.session.flush()
@@ -120,49 +152,95 @@ class ResumeParser:
         except StaleDataError:
             raise conflict() from None
 
-    async def create(self, resume_id: str, payload: ParseCreate) -> ParseDraftRead:
+    async def create(self, resume_id: str, payload: ParseCreate) -> tuple[ParseDraftRead, bool]:
+        """模型模式创建后台草稿；规则模式直接保存本地候选，不调用模型。
+
+        返回 created 供路由决定是否提交后台任务：重放同一 request_id 不会
+        重复发起收费的模型调用。
+        """
         draft_id = str(payload.request_id)
+        local = payload.mode == "rule"
+        provider = "local_rules" if local else "qwen"
         try:
             async with self.session.begin():
                 await self.materials.require_resume(resume_id, lock=True)
                 existing = await self.session.get(ResumeParseDraft, draft_id)
                 if existing is not None:
-                    if existing.resume_id != resume_id or existing.source_version != payload.source_version:
-                        raise MaterialError("parse_request_conflict", "请求标识已用于其他简历或版本", 409)
+                    if (existing.resume_id != resume_id or existing.source_version != payload.source_version
+                            or existing.provider != provider):
+                        raise MaterialError("parse_request_conflict", "请求标识已用于其他简历、版本或提取方式", 409)
                     self.expire(existing)
                     await self.session.flush()
-                    return self.read(existing)
-                if not configuration_status(self.settings)["configured"]:
+                    return self.read(existing), False
+                # 刷新页面/多个标签页也读取同一版本的在途任务，不另开收费调用。
+                running = await self.session.scalar(select(ResumeParseDraft).where(
+                    ResumeParseDraft.resume_id == resume_id,
+                    ResumeParseDraft.source_version == payload.source_version,
+                    ResumeParseDraft.provider == provider,
+                    ResumeParseDraft.status == "running",
+                ).order_by(ResumeParseDraft.created_at.desc()).limit(1))
+                if running is not None:
+                    self.expire(running)
+                    await self.session.flush()
+                    if running.status == "running":
+                        return self.read(running), False
+                if not local and not configuration_status(self.settings)["configured"]:
                     raise MaterialError("model_not_configured", "请先在本地 .env 配置 Qwen API Key 和模型名称", 503)
                 version = await self.materials.require_version(resume_id, payload.source_version)
-                source = version.source_text
-                if len(source) > 60000:
+                if not local and len(version.source_text) > 60000:
                     raise MaterialError("resume_model_input_limit", "AI 提取最多处理 60000 字符，请先精简简历", 413)
                 now = utc_now()
+                fallback = ground_result(local_candidates(version.source_text), version.source_text) if local else None
                 row = ResumeParseDraft(
                     id=draft_id, resume_id=resume_id, source_version=payload.source_version,
-                    status="running", model=self.settings.qwen_model, provider="qwen",
-                    prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION,
-                    result_json={}, confirmed_projects_json={}, created_at=now,
-                    expires_at=now + timedelta(seconds=self.settings.qwen_timeout_seconds + 30),
+                    status="ready" if local else "running", model="local-rules" if local else self.settings.qwen_model,
+                    provider=provider, prompt_version=RULE_PROMPT_VERSION if local else PROMPT_VERSION,
+                    schema_version=SCHEMA_VERSION,
+                    result_json=fallback.model_dump(mode="json") if fallback is not None else {},
+                    confirmed_projects_json={}, created_at=now,
+                    expires_at=now + timedelta(seconds=self.settings.qwen_resume_timeout_seconds + 30),
                 )
                 self.session.add(row)
                 await self.session.flush()
+                return self.read(row), True
         except IntegrityError:
-            return await self.get(resume_id, draft_id)
+            existing_draft = await self.get(resume_id, draft_id)
+            if existing_draft.source_version != payload.source_version or existing_draft.provider != provider:
+                raise MaterialError("parse_request_conflict", "请求标识已用于其他版本或提取方式", 409) from None
+            return existing_draft, False
         except StaleDataError:
             raise conflict() from None
+
+    async def run(self, resume_id: str, draft_id: str) -> None:
+        """后台执行：读取固定版本原文 → 模型调用（事务外）→ 写回草稿状态。"""
+        async with self.session.begin():
+            row = await self.require_draft(resume_id, draft_id)
+            if row.status != "running":
+                return
+            version = await self.materials.require_version(resume_id, row.source_version)
+            source = version.source_text
+            source_version = row.source_version
+            remaining = (row.expires_at - utc_now()).total_seconds()
+            if remaining <= 0:
+                self.expire(row)
+                await self.session.flush()
+                return
 
         # 模型调用不持有数据库事务；一次 request_id 仅发起一次调用，不自动重试收费请求。
         model = QwenModel(self.settings)
         output = None
         error: ModelError | None = None
         try:
-            generated = await model.generate(
-                messages=messages(source, payload.source_version), output_type=ResumeParseOutput,
-                prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION,
-            )
-            output = ground_result(generated, source)
+            # 流式接收可区分「未收到正文」与「生成中超时」，不把中间 JSON 当作已保存候选。
+            async for _ in model.generate_stream(
+                messages=messages(source, source_version), output_type=ReferencedResumeOutput,
+                prompt_version=PROMPT_VERSION, schema_version=MODEL_SCHEMA_VERSION, temperature=0,
+                timeout_seconds=min(remaining, self.settings.qwen_resume_timeout_seconds), enable_thinking=False,
+            ):
+                pass
+            if not isinstance(model.result, ReferencedResumeOutput):
+                raise ModelError("model_invalid_output", "模型未返回完整的项目引用结构")
+            output = ground_result(resolve_references(model.result, source), source)
         except ModelError as failure:
             error = failure
         except Exception as failure:
@@ -180,7 +258,6 @@ class ResumeParser:
                     assert output is not None
                     row.status, row.result_json = "ready", output.model_dump(mode="json")
                 await self.session.flush()
-            return self.read(row)
 
     async def confirm(self, resume_id: str, draft_id: str, payload: ParseConfirm) -> ProjectRead:
         if not payload.user_verified:

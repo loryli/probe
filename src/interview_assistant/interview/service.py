@@ -204,6 +204,7 @@ class InterviewService:
             except ValueError:
                 usable, reason = False, "这份计划的资料快照不完整，请重新生成并确认"
             plans.append(PlanOption(
+                practice_mode="resume" if inputs.resume_id else "question_bank",
                 id=UUID(row.id),
                 direction=inputs.direction,
                 duration_minutes=inputs.duration_minutes,
@@ -294,6 +295,7 @@ class InterviewService:
         end = row.ended_at or utc_now()
         elapsed = max(0, int((end - row.started_at).total_seconds()))
         return SessionRead(
+            practice_mode="resume" if runtime.resume_id else "question_bank",
             id=UUID(row.id),
             plan_id=UUID(row.plan_id),
             plan_revision=row.plan_revision,
@@ -551,7 +553,7 @@ class InterviewService:
                     continue
                 await self._open_turn(session_id, NextTurn(
                     objective_id=objective.id, source="question_bank",
-                    text=plain_text(snapshot.question_text)[:400],
+                    text=snapshot.question_text,
                     question_id=str(snapshot.id), activate=True, advance_cursor=True,
                 ))
                 return
@@ -659,7 +661,7 @@ class InterviewService:
             source=plan.source,
             question_id=plan.question_id,
             is_followup=plan.is_followup,
-            text=plan.text[:2000],
+            text=plan.text if plan.question_id else plan.text[:2000],
             created_at=utc_now(),
         )
         self.session.add(turn)
@@ -863,7 +865,7 @@ class InterviewService:
                 base_remaining=context.base_remaining,
             )
             elapsed_ms = 0
-            if emit is not None and decision.spoken:
+            if emit is not None and decision.spoken and context.runtime.resume_id is not None:
                 emit(decision.spoken)
         else:
             if not configuration_status(self.settings)["configured"]:
@@ -884,7 +886,7 @@ class InterviewService:
                     temperature=self.settings.qwen_interview_temperature,
                     max_tokens=DECISION_MAX_TOKENS,
                 ):
-                    if emit is None:
+                    if emit is None or context.runtime.resume_id is None:
                         continue
                     piece = extractor.feed(chunk)
                     if piece:
@@ -954,7 +956,18 @@ class InterviewService:
                 substantive = len(answer_text.strip()) >= MIN_SUBSTANTIVE_ANSWER
                 # say 已经流式展示给用户，落库必须用同一句，否则页面会跳变。
                 spoken = decision.spoken
-                if decision.objective_status == "covered":
+                if runtime.resume_id is None:
+                    # 纯题库模式不接受模型自拟追问，也不因某次回答达标跳过同组剩余原题。
+                    snapshot = self._pick_bank(
+                        self._bank_order(row.plan_id, session_id, runtime, objective), state.cursor,
+                    ) if base_remaining > 0 else None
+                    if snapshot is not None:
+                        next_turn = NextTurn(objective.id, "question_bank", snapshot.question_text,
+                            question_id=str(snapshot.id), advance_cursor=True)
+                        action = "continue"
+                    else:
+                        state.status = "covered"
+                elif decision.objective_status == "covered":
                     state.status = "covered"
                 elif (follow_up_allowed and substantive and spoken
                       and (decision.follow_up_needed
@@ -978,7 +991,7 @@ class InterviewService:
                     if snapshot is not None:
                         next_turn = NextTurn(
                             objective.id, "question_bank",
-                            plain_text(snapshot.question_text)[:400],
+                            snapshot.question_text,
                             question_id=str(snapshot.id), advance_cursor=True,
                         )
                         action = "continue"

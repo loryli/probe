@@ -21,6 +21,22 @@ target_metadata = Resume.metadata
 
 
 def run_migrations(connection: Connection) -> None:
+    if connection.dialect.name == "sqlite" and not connection.in_transaction():
+        # Alembic batch 重建父表时临时关闭当前迁移连接的外键；提交前检查完整性，
+        # 普通应用连接仍始终启用外键。不改动传入的外部事务的提交边界。
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        try:
+            with connection.begin():
+                context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+                with context.begin_transaction():
+                    context.run_migrations()
+                if connection.exec_driver_sql("PRAGMA foreign_key_check").first() is not None:
+                    raise RuntimeError("迁移后发现外键引用异常，已回滚，请检查数据库")
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+        return
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
     with context.begin_transaction():
         context.run_migrations()

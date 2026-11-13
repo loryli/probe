@@ -31,13 +31,18 @@ class InterviewPlan(Base):
             name="ck_interview_plan_status",
         ),
         CheckConstraint("revision >= 1", name="ck_interview_plan_revision"),
+        CheckConstraint(
+            "(resume_id IS NULL AND source_version IS NULL) OR "
+            "(resume_id IS NOT NULL AND source_version IS NOT NULL)",
+            name="ck_interview_plan_resume_pair",
+        ),
         Index("ix_interview_plan_listing", "deleted_at", "created_at", "id"),
         table_options,
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    resume_id: Mapped[str] = mapped_column(String(36))
-    source_version: Mapped[int] = mapped_column(Integer)
+    resume_id: Mapped[str | None] = mapped_column(String(36))
+    source_version: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16))
     revision: Mapped[int] = mapped_column(Integer, default=1)
     provider: Mapped[str] = mapped_column(String(16))

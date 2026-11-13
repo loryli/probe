@@ -266,6 +266,7 @@ class ObjectiveState(BaseModel):
 
 
 class SessionRead(BaseModel):
+    practice_mode: Literal["question_bank", "resume"] = "resume"
     id: UUID
     plan_id: UUID
     plan_revision: int
@@ -320,6 +321,7 @@ class SessionList(BaseModel):
 
 
 class PlanOption(BaseModel):
+    practice_mode: Literal["question_bank", "resume"] = "resume"
     id: UUID
     direction: str
     duration_minutes: int

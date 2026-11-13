@@ -35,25 +35,46 @@ def check_replay(item: Resume | Project, expected_hash: str) -> None:
         raise MaterialError("creation_key_conflict", "创建标识已用于其他内容或资料已删除", 409)
 
 
+_FOLD_WHITESPACE = " \t\r\n\u3000\u00a0"
+
+
+def _fold_whitespace(text: str) -> tuple[str, list[int]]:
+    """连续空白（空格/制表/换行/全角空格/不间断空格）折叠为单个分隔符。
+
+    返回折叠文本，以及每个折叠字符在原文中的偏移（分隔符记空白段首字符位置）。
+    """
+    folded: list[str] = []
+    offsets: list[int] = []
+    run_start = -1
+    for index, character in enumerate(text):
+        if character in _FOLD_WHITESPACE:
+            if run_start < 0:
+                run_start = index
+            continue
+        if run_start >= 0 and folded:
+            folded.append("\x00")
+            offsets.append(run_start)
+        run_start = -1
+        folded.append(character)
+        offsets.append(index)
+    return "".join(folded), offsets
+
+
 def original_quote(source: str, quote: str) -> str | None:
-    """浏览器复制可能转换换行；匹配后仍保存来源中的实际原文。"""
+    """匹配时忽略空白排版差异（换行转换、多余空格等），保存时仍回填来源中的实际原文。"""
     if quote in source:
         return quote
-    characters: list[str] = []
-    boundaries = [0]
-    offset = 0
-    while offset < len(source):
-        character = source[offset]
-        offset += 1
-        if character == "\r":
-            if offset < len(source) and source[offset] == "\n":
-                offset += 1
-            character = "\n"
-        characters.append(character)
-        boundaries.append(offset)
-    normalized = quote.replace("\r\n", "\n").replace("\r", "\n")
-    start = "".join(characters).find(normalized)
-    return None if start < 0 else source[boundaries[start]:boundaries[start + len(normalized)]]
+    haystack, starts = _fold_whitespace(source)
+    needle, _ = _fold_whitespace(quote.strip())
+    if not needle:
+        return None
+    position = haystack.find(needle)
+    if position < 0:
+        return None
+    # 首尾对齐到实际字符，避免把相邻空白段切进引用
+    start_offset = starts[position]
+    end_offset = starts[position + len(needle) - 1] + 1
+    return source[start_offset:end_offset]
 
 
 class MaterialService:
@@ -103,8 +124,14 @@ class MaterialService:
         return values
 
     async def upload_pdf(
-        self, file_name: str, content: bytes, mode: OcrMode, model_dir: Path,
+        self, file_name: str, content: bytes, mode: OcrMode, model_dir: Path, *,
+        refresh: bool = False,
     ) -> DocumentRead:
+        """上传或重新识别 PDF。
+
+        `refresh=False`（上传）在相同字节、识别方式与提取版本下复用已有结果，避免重复识别；
+        `refresh=True`（用户点击「重新提取」）跳过读取缓存、真正重跑一次，并用新结果覆盖该键的缓存。
+        """
         digest = hashlib.sha256(content).hexdigest()
         key = f"{EXTRACTION_VERSION}:{mode}"
         # OCR 在事务外执行，避免识别/首次下载模型期间占用数据库事务。
@@ -112,10 +139,10 @@ class MaterialService:
             document = await self.session.scalar(select(ResumeDocument).where(
                 ResumeDocument.content_sha256 == digest
             ))
-            if document is not None:
+            if document is not None and not refresh:
                 cached = await self.session.get(ResumeExtraction, (document.id, key))
                 if cached is not None:
-                    return self.extraction_read(document, cached, mode)
+                    return self.extraction_read(document, cached, mode, cache_hit=True)
         extracted = await run_in_threadpool(extract_pdf, content, mode, model_dir)
         try:
             async with self.session.begin():
@@ -130,17 +157,8 @@ class MaterialService:
                     )
                     self.session.add(document)
                     await self.session.flush()
-                cached = await self.session.get(ResumeExtraction, (document.id, key))
-                if cached is None and extracted.cacheable:
-                    cached = ResumeExtraction(
-                        document_id=document.id, extraction_key=key, extracted_text=extracted.text,
-                        warnings_json=extracted.warnings, ocr_pages_json=extracted.ocr_pages,
-                        page_methods_json=extracted.page_methods,
-                    )
-                    self.session.add(cached)
-                    await self.session.flush()
-                result = self.extraction_read(document, cached or extracted, mode)
-            return result
+                cached = await self._store_extraction(document, key, extracted)
+                return self.extraction_read(document, cached or extracted, mode)
         except IntegrityError:
             async with self.session.begin():
                 existing = await self.session.scalar(select(ResumeDocument).where(
@@ -148,12 +166,35 @@ class MaterialService:
                 ))
                 if existing is None:
                     raise
-                cached = await self.session.get(ResumeExtraction, (existing.id, key))
+                cached = await self._store_extraction(existing, key, extracted)
                 return self.extraction_read(existing, cached or extracted, mode)
+
+    async def _store_extraction(
+        self, document: ResumeDocument, key: str, extracted: PdfText,
+    ) -> ResumeExtraction | None:
+        """写入或覆盖该键的缓存；识别失败的结果不写入，也不拿旧结果冒充本次识别。"""
+        if not extracted.cacheable:
+            return None
+        cached = await self.session.get(ResumeExtraction, (document.id, key))
+        if cached is None:
+            cached = ResumeExtraction(
+                document_id=document.id, extraction_key=key, extracted_text=extracted.text,
+                warnings_json=extracted.warnings, ocr_pages_json=extracted.ocr_pages,
+                page_methods_json=extracted.page_methods,
+            )
+            self.session.add(cached)
+        else:
+            cached.extracted_text = extracted.text
+            cached.warnings_json = extracted.warnings
+            cached.ocr_pages_json = extracted.ocr_pages
+            cached.page_methods_json = extracted.page_methods
+        await self.session.flush()
+        return cached
 
     @staticmethod
     def extraction_read(
-        document: ResumeDocument, result: ResumeExtraction | PdfText, mode: OcrMode,
+        document: ResumeDocument, result: ResumeExtraction | PdfText, mode: OcrMode, *,
+        cache_hit: bool = False,
     ) -> DocumentRead:
         if isinstance(result, ResumeExtraction):
             output = PdfText(
@@ -172,6 +213,7 @@ class MaterialService:
             ocr_pages=output.ocr_pages,
             page_methods=output.page_methods,
             extraction_version=EXTRACTION_VERSION,
+            cache_hit=cache_hit,
         )
 
     async def reextract_pdf(self, document_id: str, mode: OcrMode, model_dir: Path) -> DocumentRead:
@@ -180,7 +222,7 @@ class MaterialService:
             if document is None:
                 raise MaterialError("document_not_found", "PDF 原件不存在", 404)
             content, file_name = document.original_bytes, document.file_name
-        return await self.upload_pdf(file_name, content, mode, model_dir)
+        return await self.upload_pdf(file_name, content, mode, model_dir, refresh=True)
 
     async def create_resume(self, payload: ResumeCreate, key: str | None) -> tuple[ResumeRead, bool]:
         digest = fingerprint(payload)

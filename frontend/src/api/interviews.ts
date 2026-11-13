@@ -11,13 +11,13 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, timeout = 60_000): Promise<T> {
   let response: Response
   try {
     response = await fetch(path, {
       ...init,
       headers: { Accept: 'application/json', ...init?.headers },
-      signal: init?.signal ?? AbortSignal.timeout(60_000),
+      signal: init?.signal ?? AbortSignal.timeout(timeout),
     })
   } catch {
     throw new ApiError('连接失败或请求超时。请重新读取本场状态确认操作结果。', 0)
@@ -56,14 +56,14 @@ export const interviewApi = {
   ),
   get: (id: string) => request<InterviewSession>(`/interviews/${id}`),
   create: (planId: string, mode: 'model' | 'rule', requestId: string) => request<InterviewSession>(
-    '/interviews', json({ request_id: requestId, plan_id: planId, mode }),
+    '/interviews', json({ request_id: requestId, plan_id: planId, mode }), 330_000,
   ),
-  retry: (id: string) => request<InterviewSession>(`/interviews/${id}/retry`, { method: 'POST' }),
+  retry: (id: string) => request<InterviewSession>(`/interviews/${id}/retry`, { method: 'POST' }, 330_000),
   control: (id: string, action: 'pause' | 'resume' | 'skip' | 'end', revision: number) =>
-    request<InterviewSession>(`/interviews/${id}/${action}`, json({ expected_revision: revision })),
+    request<InterviewSession>(`/interviews/${id}/${action}`, json({ expected_revision: revision }), 330_000),
   report: (id: string) => request<SessionReport>(`/interviews/${id}/report`),
   createReport: (id: string, requestId: string) => request<SessionReport>(
-    `/interviews/${id}/report`, json({ request_id: requestId }),
+    `/interviews/${id}/report`, json({ request_id: requestId }), 330_000,
   ),
   events: (id: string) => new EventSource(`/interviews/${id}/events`),
   submitAnswer: async (
@@ -82,6 +82,7 @@ export const interviewApi = {
         body: JSON.stringify({
           request_id: requestId, turn_id: turnId, answer_text: answer,
         }),
+        signal: AbortSignal.timeout(360_000),
       })
     } catch {
       throw new ApiError('连接中断。回答可能已经保存，请先读取本场状态。', 0)
@@ -119,10 +120,11 @@ export const interviewApi = {
     try {
       while (true) {
         const { value, done } = await reader.read()
-        buffer += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n')
+        buffer += decoder.decode(value, { stream: !done })
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
-        for (const line of lines) {
+        for (const rawLine of lines) {
+          const line = rawLine.replace(/\r$/, '')
           if (!line) dispatch()
           else if (line.startsWith('event:')) eventName = line.slice(6).trim()
           else if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
@@ -131,9 +133,11 @@ export const interviewApi = {
       }
       if (buffer) {
         if (buffer.startsWith('data:')) data.push(buffer.slice(5).trimStart())
-        dispatch()
       }
+      // EOF 也提交已完整收到的最后一帧，不要求供应商额外发送空行。
+      dispatch()
     } finally {
+      await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
     if (!finalState) throw new ApiError('回答已提交，但下一步状态尚未确认。请刷新本场。', 0, 'state_missing')

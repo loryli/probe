@@ -42,6 +42,25 @@
 :where(.bank-page) .reader-tabs button.active::after { position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: #8ea648; content: ''; }
 :where(.bank-page) .reader-content { padding: 22px 0; }
 :where(.bank-page) .reader-content pre, :where(.bank-page) .version-row pre { margin: 0; color: #4c574f; font-family: 'Microsoft YaHei UI', 'Noto Sans SC', sans-serif; font-size: 12px; line-height: 1.95; white-space: pre-wrap; overflow-wrap: anywhere; }
+:where(.bank-page) .md-body { color: #4c574f; font-family: 'Microsoft YaHei UI', 'Noto Sans SC', sans-serif; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+:where(.bank-page) .md-body > :first-child { margin-top: 0; }
+:where(.bank-page) .md-body > :last-child { margin-bottom: 0; }
+:where(.bank-page) .md-body p { margin: 0 0 9px; }
+:where(.bank-page) .md-body .md-heading { margin: 18px 0 8px; color: #303c33; font-size: 13px; font-weight: 700; line-height: 1.5; }
+:where(.bank-page) .md-body h3.md-heading { font-size: 16px; }
+:where(.bank-page) .md-body h4.md-heading { font-size: 14px; }
+:where(.bank-page) .md-body h5.md-heading { font-size: 13px; }
+:where(.bank-page) .md-body .md-list { margin: 0 0 10px; padding-left: 20px; }
+:where(.bank-page) .md-body .md-list li { margin: 0 0 4px; padding-left: 2px; }
+:where(.bank-page) .md-body .md-list li::marker { color: #9aa88a; }
+:where(.bank-page) .md-body .md-quote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid #d9e2cb; color: #6d7869; }
+:where(.bank-page) .md-body .md-pre { margin: 0 0 10px; padding: 10px 12px; border: 1px solid #e8ece5; border-radius: 6px; background: #f7f9f4; overflow-x: auto; }
+:where(.bank-page) .md-body .md-pre code { color: #48544a; font: 11px/1.7 ui-monospace, SFMono-Regular, monospace; white-space: pre; }
+:where(.bank-page) .md-body .md-code { padding: 1px 4px; border-radius: 4px; background: #eef2e8; color: #4a5a43; font: 11px/1.6 ui-monospace, SFMono-Regular, monospace; }
+:where(.bank-page) .md-body .md-rule { margin: 16px 0; border: 0; border-top: 1px solid #e8ece5; }
+:where(.bank-page) .md-body .md-link { color: #6f8a3f; text-decoration: underline; text-underline-offset: 2px; }
+:where(.bank-page) .md-inline { white-space: inherit; }
+:where(.bank-page) .md-empty { margin: 0; color: #9ba29a; font-size: 12px; }
 :where(.bank-page) .notes-content { padding: 15px; border-radius: 8px; background: #f6f7f2; }
 :where(.bank-page) .history-content { display: grid; gap: 10px; padding-top: 14px; }
 :where(.bank-page) .version-row { padding: 12px; border: 1px solid #e8ece5; border-radius: 7px; }

@@ -39,7 +39,7 @@ def test_heading_parser_preserves_source_fences_categories_and_explicit_question
     first, second, third = parsed.candidates
     assert first.question_text == "1\\. 什么是事务？"
     assert first.heading_path == ["我的笔记", "数据库"]
-    assert first.standard_answer_text.startswith("\r\n【标准回答话术】 原子性。  \r\n")
+    assert first.standard_answer_text.startswith("【标准回答话术】 原子性。  \r\n")
     assert "### 代码里的标题不是题目\r\nQ: 也不是题目" in first.standard_answer_text
     assert first.standard_answer_text.endswith("补充：追问要放在同一段里。\r\n\r\n")
     assert any("图片" in warning for warning in first.warnings)
@@ -233,7 +233,7 @@ def test_code_and_blank_answer_whitespace_stay_in_source_without_becoming_questi
     document = "## 分类\nQ: 真实问题？\nA: 答案\n    Q: 缩进代码\n\tQ: 也是代码\n"
     assert len(parse_markdown(document).candidates) == 1
     blank = parse_markdown("### 空答案？\r\n\r\n").candidates[0]
-    assert blank.standard_answer_text == "\r\n" and not blank.recommended
+    assert blank.standard_answer_text == "" and not blank.recommended
     categories = parse_markdown("# 全书\n## 分类一\nQ: 甲？\nA: 甲\n## 分类二\nQ: 乙？\nA: 乙\n")
     assert categories.candidates[1].heading_path == ["全书", "分类二"]
 

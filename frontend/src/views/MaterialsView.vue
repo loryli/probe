@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { RequestError, apiRequest, postJson, putJson, withIdempotencyKey } from '../api/common'
+import { apiRequest, postJson, putJson, withIdempotencyKey } from '../api/common'
+import { useResumeExtraction } from '../composables/useResumeExtraction'
 
 interface Resume { id: string; name: string; source_text: string; source_file_name: string; document_id: string | null; is_active: boolean; content_version: number; revision: number; created_at: string; updated_at: string }
-interface Fact { id?: string; fact_type: string; content: string; evidence_quote: string; source_kind?: string }
+interface Fact { id?: string; fact_type: string; content: string; evidence_quote: string; source_kind?: string; needs_confirmation?: string[] }
 interface Project { id: string; resume_id: string; source_version: number; name: string; summary: string; role: string; duration: string; tech_stack: string[]; user_verified: boolean; facts: Fact[]; revision: number }
 interface Version { version: number; name: string; source_file_name: string; document_id: string | null; created_at: string }
-interface ParseDraft { id: string; revision: number; source_version: number; status: string; result: { projects: Array<{ name: string; summary?: string | null; role?: string | null; duration?: string | null; tech_stack: string[]; evidence_quote: string; facts: Fact[]; confidence: number; needs_confirmation: string[] }> } | null; confirmed_projects: Record<string, string>; error_message: string | null }
 
 const resumes = ref<Resume[]>([])
 const resume = ref<Resume | null>(null)
@@ -22,14 +22,18 @@ const editingResume = ref(false)
 const resumeDraft = ref({ name: '', source_text: '', source_file_name: '', document_id: '' as string | null, is_active: true })
 const showResumeForm = ref(false)
 const ocrMode = ref('auto')
-const documentPreview = ref<{ id: string; file_name: string; extracted_text: string; page_count: number; warnings: string[]; ocr_pages: number[] } | null>(null)
+interface DocumentPreview { id: string; file_name: string; extracted_text: string; page_count: number; warnings: string[]; ocr_pages: number[]; cache_hit?: boolean }
+const documentPreview = ref<DocumentPreview | null>(null)
 const project = ref<Project | null>(null)
 const projectFormOpen = ref(false)
 const projectDraft = ref({ name: '', summary: '', role: '', duration: '', tech_stack: '', user_verified: false, facts: [] as Fact[] })
 const projectBusy = ref(false)
-const parseDraft = ref<ParseDraft | null>(null)
-const parseBusy = ref(false)
+const projectBaseline = ref('')
+const projectDirty = computed(() => projectFormOpen.value && JSON.stringify(projectDraft.value) !== projectBaseline.value)
+const remainingCandidates = computed(() => parseDraft.value?.result?.projects
+  .map((_, index) => index).filter((index) => !parseDraft.value?.confirmed_projects[String(index)]) ?? [])
 const candidateIndex = ref<number | null>(null)
+const candidateContext = ref<{ id: string; revision: number; source_version: number } | null>(null)
 const formSourceVersion = ref(1)
 const resumeBlocks = ref<string[]>([])
 const resumeBlocksTruncated = ref(false)
@@ -37,32 +41,35 @@ const selectedBlocks = ref<number[]>([])
 const resumeBlocksBusy = ref(false)
 const resumeCreateKey = ref(crypto.randomUUID())
 const projectCreateKey = ref(crypto.randomUUID())
-const parseRequest = ref<{ signature: string; id: string } | null>(null)
-const parseElapsed = ref(0)
-const parseStage = ref('')
-let parseClock: number | undefined
-let parsePollTimer: number | undefined
-let parsePollBusy = false
-let parseWatchToken = 0
-let parseLatest: ParseDraft | null = null
 const blockCache = new Map<string, { blocks: string[]; truncated: boolean }>()
 let blockRequest = 0
 const legacyOrigin = import.meta.env.DEV ? 'http://127.0.0.1:8000' : ''
 const selectedVersion = computed(() => resume.value?.content_version ?? 1)
 const currentSourceLabel = computed(() => resume.value ? `简历 v${selectedVersion.value}` : '未选择简历')
-const parsePending = computed(() => Boolean(
-  resume.value && parseRequest.value?.signature === `${resume.value.id}:${selectedVersion.value}`,
-))
-const parsingBanner = computed(() => `${parseStage.value}（已用 ${parseElapsed.value} 秒）`)
+const resumeId = computed(() => resume.value?.id ?? '')
+const {
+  parseDraft, parseHistory, parseBusy, backupBusy, parseLoading, parseError, parseNotice, parseElapsed, parseStage, parsePending, submissionMissing,
+  runExtraction, runLocalExtraction, readParseDraft, loadParseHistory, stopWaiting, applyParseDraft,
+} = useResumeExtraction(resumeId, selectedVersion)
+const projectReviewWarnings = computed(() => candidateIndex.value === null ? [] : [
+  ...(parseDraft.value?.result?.needs_confirmation ?? []),
+  ...(parseDraft.value?.result?.projects[candidateIndex.value]?.needs_confirmation ?? []),
+])
+const materialTab = ref<'projects' | 'source'>('projects')
+let resumeRequest = 0
+let projectRequest = 0
+const verifiedProjects = computed(() => projects.value.filter((item) => item.user_verified && item.source_version === selectedVersion.value && item.facts.length))
+watch(() => JSON.stringify({ ...projectDraft.value, user_verified: undefined }), () => {
+  if (projectFormOpen.value) projectDraft.value.user_verified = false
+}, { flush: 'sync' })
 const PROJECT_HINTS = ['项目', '负责', '开发', '实现', '设计', '搭建', '优化', '主导', '参与', '维护', '系统', '平台']
 const hasProjectBlock = computed(() => resumeBlocks.value.some((block) => PROJECT_HINTS.some((word) => block.includes(word))))
 
 onBeforeRouteLeave(() => {
   if (editingResume.value && !window.confirm('简历草稿尚未保存，离开将放弃草稿。继续吗？')) return false
-  if (projectFormOpen.value && !window.confirm('项目草稿尚未保存，离开将放弃草稿。继续吗？')) return false
-  if (parseBusy.value && !window.confirm('AI 提取仍在进行；离开后本次结果不会自动载入，返回后再次提取会重新调用模型。继续吗？')) return false
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，离开将放弃草稿。继续吗？')) return false
+  if (parseBusy.value && !window.confirm('AI 提取仍在服务端后台进行；离开后结果会保存在草稿中，返回后点击「读取本次结果」即可，不会重复调用模型。继续吗？')) return false
 })
-onBeforeUnmount(() => stopParseWatch())
 
 async function loadResumes() {
   const result = await apiRequest<{ items: Resume[] }>('/materials/resumes?limit=50&offset=0')
@@ -70,25 +77,33 @@ async function loadResumes() {
   if (!resume.value && result.items.length) await selectResume(result.items[0].id)
 }
 async function selectResume(id: string) {
+  if (projectBusy.value || (busy.value && editingResume.value)) return
   if (editingResume.value && !window.confirm('简历草稿尚未保存，切换将放弃草稿。继续吗？')) return
-  if (projectFormOpen.value && !window.confirm('项目草稿尚未保存，切换将放弃草稿。继续吗？')) return
-  loading.value = true; error.value = ''; project.value = null; parseDraft.value = null
-  parseRequest.value = null; documentPreview.value = null; projectFormOpen.value = false
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，切换将放弃草稿。继续吗？')) return
+  const token = ++resumeRequest
+  ++projectRequest
+  loading.value = true; error.value = ''; project.value = null; versionDetail.value = null
+  documentPreview.value = null; projectFormOpen.value = false
   try {
-    resume.value = await apiRequest<Resume>(`/materials/resumes/${id}`)
+    const next = await apiRequest<Resume>(`/materials/resumes/${id}`)
+    if (token !== resumeRequest) return
+    resume.value = next
     resumeDraft.value = { name: resume.value.name, source_text: resume.value.source_text, source_file_name: resume.value.source_file_name, document_id: resume.value.document_id, is_active: resume.value.is_active }
-    editingResume.value = false
+    editingResume.value = false; showResumeForm.value = false; candidateIndex.value = null
     const [projectPage, versionPage] = await Promise.all([
       apiRequest<{ items: Project[] }>(`/materials/resumes/${id}/projects?limit=50&offset=0`),
       apiRequest<{ items: Version[] }>(`/materials/resumes/${id}/versions?limit=20&offset=0`),
     ])
+    if (token !== resumeRequest) return
     projects.value = projectPage.items; versions.value = versionPage.items
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '读取简历资料失败。' }
-  finally { loading.value = false }
+  } catch (cause) { if (token === resumeRequest) error.value = cause instanceof Error ? cause.message : '读取简历资料失败。' }
+  finally { if (token === resumeRequest) loading.value = false }
 }
 function newResume() {
+  if (busy.value || projectBusy.value) return
   if (editingResume.value && !window.confirm('简历草稿尚未保存，放弃后新建？')) return
-  if (projectFormOpen.value && !window.confirm('项目草稿尚未保存，放弃后新建简历？')) return
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，放弃后新建简历？')) return
+  ++resumeRequest
   resume.value = null; projects.value = []; versions.value = []; showResumeForm.value = true; editingResume.value = true
   resumeCreateKey.value = crypto.randomUUID(); documentPreview.value = null; projectFormOpen.value = false
   resumeDraft.value = { name: '', source_text: '', source_file_name: '', document_id: null, is_active: true }
@@ -101,42 +116,63 @@ function cancelResumeEdit() {
   }
   showResumeForm.value = false; editingResume.value = false; documentPreview.value = null
 }
-async function saveResume() {
+function editResumeSource() {
+  if (!resume.value || busy.value || projectBusy.value) return
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，修正简历将放弃当前项目草稿。继续吗？')) return
+  projectFormOpen.value = false; candidateIndex.value = null; ++projectRequest
+  resumeDraft.value = { name: resume.value.name, source_text: resume.value.source_text,
+    source_file_name: resume.value.source_file_name, document_id: resume.value.document_id, is_active: resume.value.is_active }
+  showResumeForm.value = true; editingResume.value = true
+  notice.value = '请对照原 PDF 手工修正缺失文字。保存将形成新版本；已有项目与计划仍保留旧版本依据。'
+}
+async function saveResume(andExtract = false) {
+  if (busy.value) return
   if (!resumeDraft.value.name.trim() || !resumeDraft.value.source_text.trim()) { error.value = '简历名称和文字内容不能为空。'; return }
   busy.value = true; error.value = ''
   const payload = { ...resumeDraft.value, document_id: resumeDraft.value.document_id || null }
+  let saved = false
   try {
     resume.value = resume.value
       ? await apiRequest<Resume>(`/materials/resumes/${resume.value.id}`, putJson({ ...payload, expected_revision: resume.value.revision }))
       : await apiRequest<Resume>('/materials/resumes', withIdempotencyKey(postJson(payload), resumeCreateKey.value))
     showResumeForm.value = false; editingResume.value = false; notice.value = '简历版本已保存。'
     await loadResumes(); if (resume.value) await selectResume(resume.value.id)
+    saved = true
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存简历失败。' }
   finally { busy.value = false }
+  if (saved && andExtract) await fillProjectsWithAI()
 }
 async function uploadPdf(file?: File) {
-  if (!file) return
+  if (!file || busy.value || projectBusy.value) return
   if (editingResume.value && !window.confirm('简历草稿尚未保存，上传 PDF 将放弃草稿。继续吗？')) return
-  if (projectFormOpen.value && !window.confirm('项目草稿尚未保存，上传 PDF 将放弃草稿。继续吗？')) return
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，上传 PDF 将放弃草稿。继续吗？')) return
   busy.value = true; error.value = ''; notice.value = '正在读取 PDF 并提取文字…'
   try {
     const params = new URLSearchParams({ file_name: file.name, ocr_mode: ocrMode.value })
-    documentPreview.value = await apiRequest<{ id: string; file_name: string; extracted_text: string; page_count: number; warnings: string[]; ocr_pages: number[] }>(`/materials/documents/pdf?${params}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file, signal: AbortSignal.timeout(600_000) }, 600_000)
+    documentPreview.value = await apiRequest<DocumentPreview>(`/materials/documents/pdf?${params}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file, signal: AbortSignal.timeout(600_000) }, 600_000)
+    resumeCreateKey.value = crypto.randomUUID()
     resumeDraft.value = { name: file.name.replace(/\.pdf$/i, ''), source_text: documentPreview.value.extracted_text, source_file_name: file.name, document_id: documentPreview.value.id, is_active: true }
-    showResumeForm.value = true; editingResume.value = true; resume.value = null; project.value = null; parseDraft.value = null; projects.value = []; versions.value = []
-    notice.value = `PDF 提取完成：${documentPreview.value.page_count} 页。核对文字后再保存简历。`
+    showResumeForm.value = true; editingResume.value = true; resume.value = null; project.value = null; versionDetail.value = null; projects.value = []; versions.value = []
+    notice.value = documentPreview.value.cache_hit
+      ? `该 PDF 与退出前保存的原件字节相同，已直接复用「${ocrMode.value === 'force' ? '整份 OCR' : ocrMode.value === 'off' ? '仅提取已有文字' : '仅文字不足页 OCR'}」的已有识别结果。需要真正重跑识别，保存后点「重新提取」。`
+      : `PDF 提取完成：${documentPreview.value.page_count} 页。核对文字后再保存简历。`
   } catch (cause) { error.value = cause instanceof Error ? cause.message : 'PDF 识别失败。' }
   finally { busy.value = false }
 }
 async function reextract() {
-  if (!resume.value?.document_id) return
+  if (!resume.value?.document_id || busy.value) return
+  if (editingResume.value && !window.confirm('重新识别将替换当前文字草稿，继续吗？')) return
   busy.value = true; error.value = ''
+  notice.value = '正在重新识别原件，会真正重跑一次识别（整份 OCR 可能需要数分钟）…'
+  const startedAt = Date.now()
   try {
-    documentPreview.value = await apiRequest<{ id: string; file_name: string; extracted_text: string; page_count: number; warnings: string[]; ocr_pages: number[] }>(`/materials/documents/${resume.value.document_id}/extract?ocr_mode=${ocrMode.value}`, { method: 'POST' }, 600_000)
+    documentPreview.value = await apiRequest<DocumentPreview>(`/materials/documents/${resume.value.document_id}/extract?ocr_mode=${ocrMode.value}`, { method: 'POST' }, 600_000)
     resumeDraft.value = { name: resume.value.name, source_text: documentPreview.value.extracted_text, source_file_name: resume.value.source_file_name, document_id: resume.value.document_id, is_active: resume.value.is_active }
     showResumeForm.value = true; editingResume.value = true
-    notice.value = '重新提取结果是草稿；保存后才会形成新简历版本。'
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '重新识别失败。' }
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
+    const ocrPages = documentPreview.value.ocr_pages.length ? `OCR 页面 ${documentPreview.value.ocr_pages.join('、')}` : '未使用 OCR'
+    notice.value = `重新识别完成（${seconds} 秒，${ocrPages}）。这是草稿；保存后才会形成新简历版本。`
+  } catch (cause) { notice.value = ''; error.value = cause instanceof Error ? cause.message : '重新识别失败。' }
   finally { busy.value = false }
 }
 async function formatText() {
@@ -149,25 +185,41 @@ async function formatText() {
 }
 async function loadVersion(version: number) {
   if (!resume.value) return
-  try { versionDetail.value = await apiRequest<{ version: number; source_text: string }>(`/materials/resumes/${resume.value.id}/versions/${version}`) }
+  const id = resume.value.id
+  try {
+    const detail = await apiRequest<{ version: number; source_text: string }>(`/materials/resumes/${id}/versions/${version}`)
+    if (resume.value?.id === id) versionDetail.value = detail
+  }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '读取版本失败。' }
 }
 async function openProject(item: Project) {
-  if (projectFormOpen.value && !window.confirm('项目有未保存的修改，放弃并切换吗？')) return
+  if (projectBusy.value) return
+  if (projectDirty.value && !window.confirm('项目有未保存的修改，放弃并切换吗？')) return
+  const resumeId = resume.value?.id
+  if (!resumeId) return
+  const token = ++projectRequest
+  candidateIndex.value = null; projectFormOpen.value = false
   try {
-    project.value = await apiRequest<Project>(`/materials/resumes/${resume.value?.id}/projects/${item.id}`)
-    projectDraft.value = { name: project.value.name, summary: project.value.summary, role: project.value.role, duration: project.value.duration, tech_stack: project.value.tech_stack.join(', '), user_verified: project.value.user_verified, facts: structuredClone(project.value.facts) }
+    const next = await apiRequest<Project>(`/materials/resumes/${resumeId}/projects/${item.id}`)
+    if (token !== projectRequest || resume.value?.id !== resumeId) return
+    project.value = next
+    projectDraft.value = { name: project.value.name, summary: project.value.summary, role: project.value.role, duration: project.value.duration, tech_stack: project.value.tech_stack.join(', '), user_verified: project.value.user_verified, facts: project.value.facts.map((fact) => ({ ...fact })) }
+    projectBaseline.value = JSON.stringify(projectDraft.value)
     projectFormOpen.value = true
     void loadResumeBlocks(project.value.source_version)
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '读取项目失败。' }
 }
 function newProject() {
+  if (projectBusy.value) return
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，放弃并新建？')) return
+  ++projectRequest
   project.value = null; candidateIndex.value = null; projectFormOpen.value = true
   projectCreateKey.value = crypto.randomUUID()
   projectDraft.value = { name: '', summary: '', role: '', duration: '', tech_stack: '', user_verified: false, facts: [{ fact_type: '职责', content: '', evidence_quote: '' }] }
+  projectBaseline.value = JSON.stringify(projectDraft.value)
   void loadResumeBlocks(selectedVersion.value)
 }
-function addFact(target: Fact[]) { target.push({ fact_type: '职责', content: '', evidence_quote: '' }) }
+function addFact(target: Fact[]) { target.push({ fact_type: '项目描述', content: '', evidence_quote: '' }) }
 const MAX_BLOCK_CHARS = 800
 const MAX_BLOCKS = 300
 function splitResumeBlocks(text: string): { blocks: string[]; truncated: boolean } {
@@ -250,125 +302,61 @@ function toggleBlock(index: number) {
 }
 async function saveProject() {
   if (!resume.value) return
+  if (projectBusy.value) return
+  if (!projectDraft.value.name.trim()) { error.value = '请填写项目名称。'; return }
+  if (candidateIndex.value !== null && !projectDraft.value.user_verified) { error.value = '请核对项目与原文依据，并勾选确认后保存。'; return }
   projectBusy.value = true; error.value = ''
+  const confirmingCandidate = candidateIndex.value !== null
   const payload = { name: projectDraft.value.name, summary: projectDraft.value.summary, role: projectDraft.value.role, duration: projectDraft.value.duration, tech_stack: projectDraft.value.tech_stack.split(/[,，]/).map((item) => item.trim()).filter(Boolean), user_verified: projectDraft.value.user_verified, facts: projectDraft.value.facts.filter((item) => item.content.trim()).map(({ fact_type, content, evidence_quote }) => ({ fact_type, content, evidence_quote })) }
   try {
-    if (candidateIndex.value !== null && parseDraft.value) {
-      await apiRequest(`/materials/resumes/${resume.value.id}/parse-drafts/${parseDraft.value.id}/confirm`, postJson({ ...payload, candidate_index: candidateIndex.value, expected_revision: parseDraft.value.revision }))
-      parseDraft.value = await apiRequest<ParseDraft>(`/materials/resumes/${resume.value.id}/parse-drafts/${parseDraft.value.id}`)
+    if (candidateIndex.value !== null && candidateContext.value) {
+      const candidate = candidateContext.value
+      await apiRequest(`/materials/resumes/${resume.value.id}/parse-drafts/${candidate.id}/confirm`, postJson({ ...payload, candidate_index: candidateIndex.value, expected_revision: candidate.revision }))
+      applyParseDraft(await apiRequest<NonNullable<typeof parseDraft.value>>(`/materials/resumes/${resume.value.id}/parse-drafts/${candidate.id}`))
     } else if (project.value) {
       project.value = await apiRequest<Project>(`/materials/resumes/${resume.value.id}/projects/${project.value.id}`, putJson({ ...payload, expected_revision: project.value.revision }))
     } else {
-      project.value = await apiRequest<Project>(`/materials/resumes/${resume.value.id}/projects`, withIdempotencyKey(postJson({ ...payload, source_version: selectedVersion.value }), projectCreateKey.value))
+      project.value = await apiRequest<Project>(`/materials/resumes/${resume.value.id}/projects`, withIdempotencyKey(postJson({ ...payload, source_version: formSourceVersion.value }), projectCreateKey.value))
     }
     projectFormOpen.value = false; candidateIndex.value = null
     projects.value = (await apiRequest<{ items: Project[] }>(`/materials/resumes/${resume.value.id}/projects?limit=50&offset=0`)).items
     notice.value = '项目已保存；所依据的简历版本保持固定。'
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存项目失败。' }
   finally { projectBusy.value = false }
-}
-function stopParseWatch() {
-  if (parseClock !== undefined) { window.clearInterval(parseClock); parseClock = undefined }
-  if (parsePollTimer !== undefined) { window.clearInterval(parsePollTimer); parsePollTimer = undefined }
-}
-async function refreshParseDraft(resumeId: string, draftId: string, token: number) {
-  if (parsePollBusy) return
-  parsePollBusy = true
-  try {
-    const latest = await apiRequest<ParseDraft>(`/materials/resumes/${resumeId}/parse-drafts/${draftId}`, undefined, 15_000)
-    if (token !== parseWatchToken) return
-    parseLatest = latest
-    if (latest.status === 'running') parseStage.value = 'Qwen 正在阅读简历并提取项目事实…'
-    else if (latest.status === 'ready') parseStage.value = '提取完成，正在载入候选项目…'
-    else if (latest.status === 'failed') parseStage.value = '提取未完成，正在读取原因…'
-    else parseStage.value = '正在读取提取结果…'
-  } catch {
-    // 轮询只用于展示进度，读取失败不打断已发出的模型请求。
-  } finally { parsePollBusy = false }
-}
-function startParseWatch(resumeId: string, draftId: string) {
-  stopParseWatch()
-  const token = ++parseWatchToken
-  parseStage.value = '正在提交提取请求…'
-  parseElapsed.value = 0
-  parseLatest = null
-  const startedAt = Date.now()
-  parseClock = window.setInterval(() => { parseElapsed.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
-  parsePollTimer = window.setInterval(() => { void refreshParseDraft(resumeId, draftId, token) }, 2_000)
-}
-async function waitForParseDraft(resumeId: string, draftId: string): Promise<ParseDraft> {
-  const deadline = Date.now() + 330_000
-  while (Date.now() < deadline) {
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 2_000))
-    try {
-      const latest = await apiRequest<ParseDraft>(`/materials/resumes/${resumeId}/parse-drafts/${draftId}`, undefined, 15_000)
-      if (latest.status !== 'running') return latest
-    } catch {
-      // 短暂读取失败后继续等待原任务，不重新发起模型调用。
-    }
-  }
-  throw new Error('等待提取结果超时；稍后可点击「读取本次结果」继续读取，不会重复调用模型。')
-}
-function applyParseDraft(draft: ParseDraft) {
-  parseDraft.value = draft
-  if (draft.status !== 'running') parseRequest.value = null
-  if (draft.status === 'failed') {
-    error.value = draft.error_message
-      ? `${draft.error_message}。可再次点击「AI 提取草稿」重新发起，那会是一次新的模型调用。`
-      : '提取失败。可再次点击「AI 提取草稿」重新发起，那会是一次新的模型调用。'
-  } else if (draft.status === 'running') {
-    notice.value = '上一次提取仍在处理中；稍后再次点击按钮读取结果，不要重复发起。'
-  } else if (draft.status === 'confirmed') {
-    notice.value = '该简历版本已有全部确认过的提取草稿，可在下方查看记录。'
-  } else {
-    const cost = draft.elapsed_ms ? `（模型用时 ${Math.round(draft.elapsed_ms / 1000)} 秒）` : ''
-    notice.value = `AI 候选已生成${cost}。请载入候选、编辑并核对后再逐项保存。`
+  if (!error.value && confirmingCandidate && remainingCandidates.value.length && parseDraft.value?.status === 'ready') {
+    editCandidate(remainingCandidates.value[0])
+    notice.value = '上一项目已保存，请继续核对下一个项目。'
   }
 }
-async function runExtraction() {
-  if (!resume.value || parseBusy.value) return
-  const resumeId = resume.value.id
-  const version = selectedVersion.value
-  const signature = `${resumeId}:${version}`
-  let requestId = parseRequest.value?.signature === signature ? parseRequest.value.id : ''
-  if (!requestId) {
-    requestId = crypto.randomUUID()
-    parseRequest.value = { signature, id: requestId }
-  }
-  parseBusy.value = true; error.value = ''; notice.value = ''
-  startParseWatch(resumeId, requestId)
-  try {
-    let draft = await apiRequest<ParseDraft>(`/materials/resumes/${resumeId}/parse-drafts`, postJson({ request_id: requestId, source_version: version }), 330_000)
-    if (draft.status === 'running') {
-      parseStage.value = '上一次提取仍在处理中，正在等待结果…'
-      draft = await waitForParseDraft(resumeId, requestId)
-    }
-    applyParseDraft(draft)
-  } catch (cause) {
-    const latest = parseLatest
-    if (latest && latest.status === 'ready') {
-      applyParseDraft(latest)
-    } else if (latest && latest.status === 'failed') {
-      applyParseDraft(latest)
-    } else {
-      if (latest?.status !== 'running' && cause instanceof RequestError
-        && ((cause.status >= 400 && cause.status < 500) || cause.status === 503)) {
-        parseRequest.value = null
-      }
-      error.value = latest?.status === 'running'
-        ? '模型仍在处理，结果尚未返回；稍后点击「读取本次结果」继续读取，不会重复调用模型。'
-        : cause instanceof Error ? cause.message : '项目提取失败。'
-    }
-  } finally {
-    stopParseWatch(); parseBusy.value = false
-  }
+function closeProjectForm() {
+  if (projectBusy.value) return
+  if (projectDirty.value && !window.confirm('项目修改尚未保存，放弃本次修改并关闭表单？')) return
+  projectFormOpen.value = false; candidateIndex.value = null
 }
 function editCandidate(index: number) {
   const item = parseDraft.value?.result?.projects[index]
-  if (!item) return
+  if (!item || projectBusy.value) return
+  if (projectDirty.value && !window.confirm('项目草稿尚未保存，放弃并载入候选？')) return
+  ++projectRequest
+  const draft = parseDraft.value!
+  candidateContext.value = { id: draft.id, revision: draft.revision, source_version: draft.source_version }
   candidateIndex.value = index; project.value = null; projectFormOpen.value = true
-  projectDraft.value = { name: item.name, summary: item.summary ?? '', role: item.role ?? '', duration: item.duration ?? '', tech_stack: item.tech_stack.join(', '), user_verified: false, facts: structuredClone(item.facts) }
+  projectDraft.value = { name: item.name, summary: item.summary ?? '', role: item.role ?? '', duration: item.duration ?? '', tech_stack: item.tech_stack.join(', '), user_verified: false, facts: item.facts.map((fact) => ({ ...fact })) }
+  projectBaseline.value = JSON.stringify(projectDraft.value)
   void loadResumeBlocks(parseDraft.value?.source_version ?? selectedVersion.value)
+}
+async function fillProjectsWithAI() {
+  const source = `${resumeId.value}:${selectedVersion.value}`
+  const before = `${parseDraft.value?.id}:${parseDraft.value?.status}`
+  await runExtraction()
+  if (source !== `${resumeId.value}:${selectedVersion.value}` || parseError.value || editingResume.value || projectFormOpen.value) return
+  if (before !== `${parseDraft.value?.id}:${parseDraft.value?.status}` && remainingCandidates.value.length) editCandidate(remainingCandidates.value[0])
+}
+async function fillProjectsLocally() {
+  const source = `${resumeId.value}:${selectedVersion.value}`
+  await runLocalExtraction()
+  if (source !== `${resumeId.value}:${selectedVersion.value}` || parseError.value || editingResume.value || projectFormOpen.value) return
+  if (remainingCandidates.value.length) editCandidate(remainingCandidates.value[0])
 }
 async function deleteProject(item: Project) {
   if (!resume.value || !window.confirm(`删除项目“${item.name}”？`)) return
@@ -385,25 +373,51 @@ onMounted(async () => { loading.value = true; try { await loadResumes() } catch 
 
 <template>
   <main class="work-page materials-page">
-    <div class="page-heading"><div><p class="eyebrow">SOURCE BEFORE SUMMARY</p><h1>简历与项目</h1><p class="heading-intro">原件、提取草稿、已保存版本和项目事实各自保留，依据清晰可追。</p></div><div class="heading-actions"><label class="button button-outline file-button">上传 PDF<input type="file" accept="application/pdf,.pdf" @change="uploadPdf(($event.target as HTMLInputElement).files?.[0])" /></label><button class="button button-primary" @click="newResume()">＋ 新建简历</button></div></div>
-    <div class="materials-layout">
-      <aside class="materials-rail"><p class="eyebrow">SAVED RESUMES</p><button v-for="item in resumes" :key="item.id" class="resume-choice" :class="{ active: resume?.id === item.id }" @click="selectResume(item.id)"><span class="resume-symbol">R</span><span><strong>{{ item.name }}</strong><small>{{ item.is_active ? '使用中' : '已停用' }} · v{{ item.content_version }}</small></span></button><p v-if="!resumes.length" class="quiet-copy">保存简历后会显示在这里。</p><button class="text-action add-resume" @click="newResume()">＋ 新建资料</button><div v-if="resume" class="version-rail"><p class="eyebrow">VERSION HISTORY</p><button v-for="version in versions" :key="version.version" :class="{ current: version.version === resume.content_version }" @click="loadVersion(version.version)"><span>v{{ version.version }}</span><small>{{ version.name }}</small><i v-if="version.version === resume.content_version">当前</i></button></div></aside>
+    <div class="page-heading"><div><p class="eyebrow">SOURCE BEFORE SUMMARY</p><h1>简历与项目</h1><p class="heading-intro">上传简历，让 AI 填好项目资料。核对后用于项目面试；纯题库练习可直接跳过。</p></div><div class="heading-actions"><label class="button button-outline file-button">上传 PDF<input type="file" accept="application/pdf,.pdf" @change="uploadPdf(($event.target as HTMLInputElement).files?.[0])" /></label><button class="button button-primary" @click="newResume()">＋ 新建简历</button></div></div>
+    <div class="materials-flow"><span :class="{ done: !!resume }">1 上传并核对简历</span><span :class="{ active: !!resume && !verifiedProjects.length }">2 AI 填写项目</span><span :class="{ done: verifiedProjects.length > 0 }">3 核对保存，开始面试</span><RouterLink to="/planner">只练题库，无需上传 →</RouterLink></div><div class="materials-layout">
+      <aside class="materials-rail"><p class="eyebrow">SAVED RESUMES</p><button v-for="item in resumes" :key="item.id" :disabled="busy || projectBusy" class="resume-choice" :class="{ active: resume?.id === item.id }" @click="selectResume(item.id)"><span class="resume-symbol">R</span><span><strong>{{ item.name }}</strong><small>{{ item.is_active ? '使用中' : '已停用' }} · v{{ item.content_version }}</small></span></button><p v-if="!resumes.length" class="quiet-copy">保存简历后会显示在这里。</p><button class="text-action add-resume" @click="newResume()">＋ 新建资料</button><div v-if="resume" class="version-rail"><p class="eyebrow">VERSION HISTORY</p><button v-for="version in versions" :key="version.version" :class="{ current: version.version === resume.content_version }" @click="loadVersion(version.version)"><span>v{{ version.version }}</span><small>{{ version.name }}</small><i v-if="version.version === resume.content_version">当前</i></button></div></aside>
       <section class="materials-main">
-        <div v-if="showResumeForm" class="resume-editor"><div class="section-title"><div><p class="eyebrow">{{ resume ? 'EDIT DRAFT' : 'NEW RESUME' }}</p><h2>{{ resume ? '核对并保存简历' : '建立一份简历版本' }}</h2></div><button class="text-action" @click="cancelResumeEdit()">取消</button></div><label class="editor-label">资料名称</label><input v-model="resumeDraft.name" class="material-input" maxlength="200" /><label class="verified-choice"><input v-model="resumeDraft.is_active" type="checkbox" /> 设为当前使用简历</label><div class="file-source" v-if="resumeDraft.document_id"><span>PDF 原件已关联 · {{ resumeDraft.source_file_name }}</span><a :href="`${legacyOrigin}/materials/documents/${resumeDraft.document_id}/file`" target="_blank">查看原件 ↗</a></div><div v-if="documentPreview" class="extract-summary"><b>{{ documentPreview.page_count }} 页</b><span>OCR 页面：{{ documentPreview.ocr_pages.length ? documentPreview.ocr_pages.join('、') : '无' }}</span><small v-for="warning in documentPreview.warnings" :key="warning">{{ warning }}</small></div><label class="editor-label">提取文字 / 简历正文</label><textarea v-model="resumeDraft.source_text" class="resume-text-editor" rows="18" placeholder="粘贴简历文字。原文会按版本保存。"></textarea><div class="editor-toolbar"><label>重新识别策略 <select v-model="ocrMode"><option value="auto">仅文字不足页 OCR</option><option value="force">整份 OCR</option><option value="off">关闭 OCR</option></select></label><button v-if="resume?.document_id" class="text-action" @click="reextract()">重新提取</button><button class="text-action" @click="formatText()">整理断行草稿</button><button class="button button-primary button-small" :disabled="busy" @click="saveResume()">{{ busy ? '保存中…' : '保存版本' }}</button></div></div>
+        <div v-if="showResumeForm" class="resume-editor"><div class="section-title"><div><p class="eyebrow">{{ resume ? 'EDIT DRAFT' : 'NEW RESUME' }}</p><h2>{{ resume ? '核对并保存简历' : '建立一份简历版本' }}</h2></div><button class="text-action" @click="cancelResumeEdit()">取消</button></div><label class="editor-label">资料名称</label><input v-model="resumeDraft.name" class="material-input" maxlength="200" /><label class="verified-choice"><input v-model="resumeDraft.is_active" type="checkbox" /> 设为当前使用简历</label><div class="file-source" v-if="resumeDraft.document_id"><span>PDF 原件已关联 · {{ resumeDraft.source_file_name }}</span><a :href="`${legacyOrigin}/materials/documents/${resumeDraft.document_id}/file`" target="_blank">查看原件 ↗</a></div><div v-if="documentPreview" class="extract-summary"><b>{{ documentPreview.page_count }} 页</b><span>OCR 页面：{{ documentPreview.ocr_pages.length ? documentPreview.ocr_pages.join('、') : '无' }}</span><small v-for="warning in documentPreview.warnings" :key="warning">{{ warning }}</small></div><label class="editor-label">提取文字 / 简历正文</label><textarea v-model="resumeDraft.source_text" class="resume-text-editor" rows="18" placeholder="粘贴简历文字。原文会按版本保存。"></textarea><div class="editor-toolbar"><label>重新识别策略 <select v-model="ocrMode"><option value="auto">仅文字不足页 OCR</option><option value="force">整份 OCR</option><option value="off">关闭 OCR</option></select></label><button v-if="resume?.document_id" class="text-action" @click="reextract()">重新提取</button><button class="text-action" @click="formatText()">整理断行草稿</button><button class="button button-outline button-small" :disabled="busy" @click="saveResume()">仅保存简历</button><button class="button button-primary button-small" :disabled="busy" @click="saveResume(true)">{{ busy ? '保存中…' : '保存并 AI 填写项目' }}</button></div></div>
         <template v-else-if="resume">
-          <div class="material-overview"><div><p class="eyebrow">SAVED SOURCE · VERSION {{ resume.content_version }}</p><h2>{{ resume.name }}</h2><p>{{ resume.source_file_name || '手工文字资料' }} <span>·</span> 更新于 {{ new Date(resume.updated_at).toLocaleDateString('zh-CN') }}</p></div><div class="overview-actions"><button class="button button-outline button-small" @click="showResumeForm = true; editingResume = true">编辑文字</button><button class="text-action danger-action" @click="deleteResume()">移除</button></div></div>
+          <div class="material-overview"><div><p class="eyebrow">SAVED SOURCE · VERSION {{ resume.content_version }}</p><h2>{{ resume.name }}</h2><p>{{ resume.source_file_name || '手工文字资料' }} <span>·</span> 更新于 {{ new Date(resume.updated_at).toLocaleDateString('zh-CN') }}</p></div><div class="overview-actions"><a v-if="resume.document_id" class="text-action" :href="`${legacyOrigin}/materials/documents/${resume.document_id}/file`" target="_blank" rel="noopener">PDF 原件 ↗</a><button class="button button-outline button-small" @click="editResumeSource()">编辑文字</button><button class="text-action danger-action" @click="deleteResume()">移除</button></div></div>
           <div v-if="versionDetail" class="version-preview"><div><strong>简历 v{{ versionDetail.version }} 只读预览</strong><button class="text-action" @click="versionDetail = null">关闭</button></div><pre>{{ versionDetail.source_text }}</pre></div>
-          <section class="project-workspace"><div class="section-title"><div><p class="eyebrow">PROJECTS / EVIDENCE</p><h2>项目事实 <small>依据 {{ currentSourceLabel }}</small></h2></div><div class="project-actions"><button class="button button-outline button-small" :disabled="parseBusy" @click="runExtraction()">{{ parseBusy ? '提取中…' : parsePending ? '读取本次结果' : 'AI 提取草稿' }}</button><button class="button button-primary button-small" @click="newProject()">＋ 添加项目</button></div></div>
-            <div v-if="parseBusy" class="parse-progress" role="status" aria-live="polite"><div class="parse-progress-head"><span class="spinner"></span><b>{{ parseStage }}</b><span class="parse-clock">已用 {{ parseElapsed }} 秒</span></div><div class="parse-progress-track"><span></span></div><p>Qwen 读取整份简历通常需要 1–2 分钟；结果只保存为待核对草稿，不会直接写入项目。请保持页面打开。</p></div>
-            <div v-if="parseDraft?.result" class="candidate-review"><div class="candidate-review-title"><span><b>AI 候选 · 待人工核对</b><small>读取已保存简历 v{{ parseDraft.source_version }}；模型置信度不代表真实性。</small></span><button class="text-action" @click="parseDraft = null">收起</button></div><article v-for="(candidate, index) in parseDraft.result.projects" :key="index" class="ai-candidate"><div><strong>{{ candidate.name }}</strong><span>模型置信 {{ Math.round(candidate.confidence * 100) }}% · 原文依据待核对</span><blockquote>{{ candidate.evidence_quote }}</blockquote></div><button v-if="parseDraft.confirmed_projects[String(index)]" class="status-chip chip-green">已确认</button><button v-else class="text-action" @click="editCandidate(index)">载入编辑核对 →</button></article></div>
-            <div v-if="projectFormOpen" class="project-editor"><div class="editor-title"><b>{{ candidateIndex !== null ? '载入候选并人工核对' : project ? '编辑项目' : '新建项目' }}</b><button class="text-action" @click="projectFormOpen = false; candidateIndex = null">取消</button></div><div class="project-fields"><label>项目名称<input v-model="projectDraft.name" /></label><label>角色<input v-model="projectDraft.role" /></label><label>周期<input v-model="projectDraft.duration" /></label><label>技术栈<input v-model="projectDraft.tech_stack" placeholder="Python, FastAPI, ..." /></label><label class="full-field">项目摘要<textarea v-model="projectDraft.summary" rows="3"></textarea></label></div><details class="resume-picker" open><summary>从简历 v{{ formSourceVersion }} 原文选取事实 <small>逐字回填，不调用模型</small></summary><p class="picker-hint">勾选段落会同时填入事实内容与原文引用；可继续编辑类型和措辞。未找到项目段落时请手动添加。</p><p v-if="!resumeBlocksBusy && resumeBlocks.length && !hasProjectBlock" class="picker-hint">未在简历原文中发现明显的项目段落，可手动填写事实。</p><div v-if="resumeBlocksBusy" class="picker-hint">正在读取简历原文…</div><div v-else-if="resumeBlocks.length" class="picker-list"><label v-for="(block, index) in resumeBlocks" :key="index" class="picker-block"><input type="checkbox" :checked="selectedBlocks.includes(index)" @change="toggleBlock(index)" /><span>{{ block }}</span></label></div><p v-else class="picker-hint">未读取到可回填的简历原文，请手动填写事实。</p><p v-if="resumeBlocksTruncated" class="picker-hint">原文较长，仅显示前 {{ resumeBlocks.length }} 段；其余内容可手动引用。</p></details><div class="facts-editor"><div class="editor-title"><b>项目事实与依据</b><button class="text-action" @click="addFact(projectDraft.facts)">＋ 添加事实</button></div><article v-for="(fact, index) in projectDraft.facts" :key="index" class="fact-edit"><input v-model="fact.fact_type" aria-label="事实类型" placeholder="类型" /><textarea v-model="fact.content" aria-label="事实内容" placeholder="事实内容"></textarea><textarea v-model="fact.evidence_quote" aria-label="原文引用" placeholder="简历原文引用；无引用留空并标为手工补充"></textarea><button class="remove-fact" @click="projectDraft.facts.splice(index, 1)">×</button></article></div><label class="verified-choice"><input v-model="projectDraft.user_verified" type="checkbox" /> 我已核对并确认此项目</label><div class="editor-toolbar"><span>写入项目后固定引用简历 v{{ formSourceVersion }}</span><button class="button button-primary button-small" :disabled="projectBusy" @click="saveProject()">{{ projectBusy ? '保存中…' : '保存项目' }}</button></div></div>
-            <div class="project-list"><article v-for="item in projects" :key="item.id" class="project-card" :class="{ selected: project?.id === item.id }" @click="openProject(item)"><div class="project-card-head"><div><span class="project-state" :class="item.user_verified ? 'verified' : ''">{{ item.user_verified ? '已核对' : '待核对' }}</span><h3>{{ item.name }}</h3></div><span class="source-version">依据 v{{ item.source_version }}</span></div><p>{{ item.summary || '暂无项目摘要。' }}</p><div class="tech-tags"><span v-for="tech in item.tech_stack" :key="tech">{{ tech }}</span></div><div class="project-facts"><div v-for="fact in item.facts.slice(0, 3)" :key="fact.id"><b>{{ fact.fact_type }}</b><span>{{ fact.content }}</span><small>{{ fact.evidence_quote ? '简历原文引用' : '手工补充' }}</small></div><button class="text-action danger-action" @click.stop="deleteProject(item)">删除项目</button></div></article><div v-if="!projects.length" class="no-projects"><span>没有项目事实</span><p>添加已核对项目，或从当前保存版本提取候选后人工核对。</p><button class="text-action" @click="newProject()">添加第一个项目 →</button></div></div>
+          <div class="material-tabs" role="group" aria-label="资料视图"><button :class="{ active: materialTab === 'projects' }" @click="materialTab = 'projects'">项目与事实 <small>{{ projects.length }}</small></button><button :class="{ active: materialTab === 'source' }" @click="materialTab = 'source'">简历原文 · v{{ selectedVersion }}</button></div>
+          <section v-if="materialTab === 'source'" class="saved-source"><div class="section-title"><h3>已保存原文</h3><a v-if="resume.document_id" :href="`${legacyOrigin}/materials/documents/${resume.document_id}/file`" target="_blank" rel="noopener">打开 PDF 原件 ↗</a></div><p>此文字是项目引用的版本依据；编辑并保存后形成新版本。</p><pre>{{ resume.source_text }}</pre></section>
+          <section v-show="materialTab === 'projects'" class="project-workspace"><div class="section-title"><div><p class="eyebrow">PROJECTS / EVIDENCE</p><h2>项目资料 <small>依据 {{ currentSourceLabel }}</small></h2></div><div class="project-actions"><button class="button button-primary button-small" :disabled="parseBusy || parseLoading || loading || projectFormOpen" @click="fillProjectsWithAI()">{{ parseBusy ? '提取中…' : parseLoading ? '读取记录…' : submissionMissing ? '重试提交原请求' : parsePending ? '读取本次结果' : parseDraft ? '重新 AI 填写' : 'AI 填写项目' }}</button><button class="button button-outline button-small" :disabled="backupBusy || parseLoading || loading || projectFormOpen" @click="fillProjectsLocally()">{{ backupBusy ? '生成备选…' : '本地规则备选' }}</button><button class="button button-outline button-small" :disabled="projectBusy || loading" @click="newProject()">手工添加</button></div></div>
+            <div class="extraction-intro"><p>AI 会从已保存的简历填写项目表单，你只需逐个核对、修改并保存。</p><button class="text-action" :disabled="parseBusy || parseLoading || projectFormOpen" @click="loadParseHistory()">读取提取记录</button></div>
+            <div v-if="parseHistory.length" class="extraction-history"><label for="parse-record">提取记录</label><select id="parse-record" :value="parseDraft?.id" :disabled="parseBusy || parseLoading || projectFormOpen" @change="readParseDraft(($event.target as HTMLSelectElement).value)"><option v-for="item in parseHistory" :key="item.id" :value="item.id">{{ new Date(item.created_at).toLocaleString('zh-CN') }} · {{ item.provider === 'local_rules' ? '本地规则' : 'AI' }} · {{ item.status === 'running' ? '处理中' : item.status === 'failed' ? '失败' : item.status === 'confirmed' ? '已全部保存' : '待核对' }}</option></select><button v-if="parseDraft?.status === 'running' && !parseBusy" class="text-action" @click="readParseDraft(parseDraft.id)">继续等待原任务</button></div>
+            <div v-if="parseError" class="extraction-error" role="alert"><strong>提取未完成</strong><p>{{ parseError }}</p><small v-if="parseDraft?.error_code && parseError === parseDraft.error_message">错误标识：{{ parseDraft.error_code }}</small><p v-if="parseDraft?.elapsed_ms != null && parseError === parseDraft.error_message">耗时 {{ (parseDraft.elapsed_ms / 1000).toFixed(1) }} 秒 · {{ parseDraft.model }}</p><p>可以改用本地规则备选，不依赖网络或模型；结果仍需核对后保存。</p><button class="button button-outline button-small" :disabled="backupBusy || parseLoading || projectFormOpen" @click="fillProjectsLocally()">按原文生成备选候选</button></div>
+            <p v-if="parseNotice" class="extraction-note" role="status">{{ parseNotice }}</p>
+            <p v-if="parseDraft?.status === 'running' && !parseBusy" class="extraction-note">发现未结束的原任务。读取结果只查询状态，不会重新调用模型；服务重启中断的任务会在到期后标记失败。</p>
+            <div v-if="parseBusy" class="parse-progress" role="status" aria-live="polite"><div class="parse-progress-head"><span class="spinner"></span><b>{{ parseStage }}</b><span class="parse-clock">已用 {{ parseElapsed }} 秒</span></div><p>{{ backupBusy ? '本地规则正在读取已保存原文，不调用模型。' : 'AI 在后台处理，页面每 2 秒读取一次草稿。可停止等待或直接改用本地规则；后台 AI 任务不受影响。' }}结果均需核对后保存。</p><div class="parse-progress-actions"><span>模型处理时长不固定，没有可用进度百分比。</span><button class="text-action" type="button" @click="stopWaiting()">停止等待（后台继续）</button></div></div>
+            <div v-if="parseDraft?.result && !projectFormOpen" class="candidate-review"><div class="candidate-review-title"><span><b>{{ parseDraft.provider === 'local_rules' ? '本地规则候选 · 未调用模型' : 'AI 候选 · 待人工核对' }}</b><small>读取已保存简历 v{{ parseDraft.source_version }}；{{ parseDraft.provider === 'local_rules' ? '按原文分组，需核对项目边界与事实归属。' : '模型置信度不代表真实性。' }}</small></span><span class="status-chip">{{ parseDraft.result.projects.length }} 个候选</span></div><ul v-if="parseDraft.result.needs_confirmation.length" class="extraction-warnings"><li v-for="warning in parseDraft.result.needs_confirmation" :key="warning">{{ warning }}</li></ul><p v-if="!parseDraft.result.projects.length" class="extraction-note">{{ parseDraft.provider === 'local_rules' ? '未找到可靠的项目边界。请手工添加项目并选取原文事实，规则不会把整份简历当成一个项目。' : '没有通过原文范围校验的候选。请查看提示，或使用本地规则备选。' }}</p><article v-for="(candidate, index) in parseDraft.result.projects" :key="index" class="ai-candidate"><div><strong>{{ candidate.name }}</strong><span>{{ candidate.facts.length }} 条事实 · 待核对原文依据</span><p v-if="candidate.summary">{{ candidate.summary }}</p><details><summary>查看原文依据与待核对项</summary><blockquote>{{ candidate.evidence_quote }}</blockquote></details><div v-if="candidate.needs_confirmation.length" class="candidate-quality" role="note"><strong>保存前需核对</strong><ul><li v-for="warning in candidate.needs_confirmation" :key="warning">{{ warning }}</li></ul><button class="text-action" @click="editResumeSource()">对照原件修正简历文字 →</button><small>可先在候选编辑中移除残缺事实，保留其他完整内容。请核对引用范围；确有原文错误时修正为新版，旧候选不会自动换绑。</small></div></div><button v-if="parseDraft.confirmed_projects[String(index)]" class="status-chip chip-green">已确认</button><button v-else class="text-action" @click="editCandidate(index)">填写此项目 →</button></article></div>
+            <section v-if="projectFormOpen" class="project-editor">
+              <div class="editor-title"><div><strong>{{ candidateIndex !== null ? (parseDraft?.provider === 'local_rules' ? '核对本地备选项目' : '核对 AI 填写的项目') : project ? '编辑项目' : '填写项目' }}</strong><p>名称、技术栈、简介和多条描述组成一份项目资料；来源依据按需展开。</p></div><button class="text-action" :disabled="projectBusy" @click="closeProjectForm()">关闭表单</button></div>
+              <div v-if="candidateIndex !== null && parseDraft?.result" class="project-draft-tabs" role="group" aria-label="提取的项目"><button v-for="(item, index) in parseDraft.result.projects" :key="index" :disabled="projectBusy || !!parseDraft.confirmed_projects[String(index)]" :aria-pressed="candidateIndex === index" :class="{ active: candidateIndex === index }" @click="editCandidate(index)">{{ item.name }}{{ parseDraft.confirmed_projects[String(index)] ? ' · 已保存' : '' }}</button></div>
+<div v-if="projectReviewWarnings.length" class="candidate-quality" role="note"><strong>以下内容需要核对</strong><ul><li v-for="warning in projectReviewWarnings" :key="warning">{{ warning }}</li></ul></div>
+              <fieldset class="project-form-fields" :disabled="projectBusy">
+                <div class="project-fields"><label>项目名称<input v-model="projectDraft.name" maxlength="200" placeholder="项目名称" /></label><label>技术栈<input v-model="projectDraft.tech_stack" placeholder="用逗号分隔，如 Python, FastAPI, LangGraph" /></label><label class="full-field">项目简介<textarea v-model="projectDraft.summary" rows="4" placeholder="项目面向谁、解决什么问题、整体实现了什么。"></textarea></label></div>
+                <div class="description-heading"><div><h3>项目描述</h3><p>每条记录一项职责、实现、决策或成果；AI 会从简历中逐条填写。</p></div><button class="text-action" type="button" @click="addFact(projectDraft.facts)">＋ 添加一条</button></div>
+                <article v-for="(fact, index) in projectDraft.facts" :key="index" class="description-item">
+                  <div class="description-item-head"><label :for="`project-description-${index}`">描述 {{ index + 1 }}</label><button class="text-action danger-action" type="button" @click="projectDraft.facts.splice(index, 1)">移除</button></div>
+                  <textarea :id="`project-description-${index}`" v-model="fact.content" rows="4" maxlength="10000" placeholder="填写这一条的具体项目经历，不需要重复填写来源原文。"></textarea>
+                  <ul v-if="fact.needs_confirmation?.length" class="fact-quality"><li v-for="warning in fact.needs_confirmation" :key="warning">{{ warning }}</li></ul>
+                  <details class="description-evidence"><summary>{{ fact.evidence_quote ? `查看原文依据 · 简历 v${formSourceVersion}` : '手工补充 · 类型和来源' }}</summary><label>描述类型<input v-model="fact.fact_type" maxlength="50" /></label><label>原文引用<textarea v-model="fact.evidence_quote" rows="3" placeholder="无简历引用可留空，保存为手工补充。"></textarea></label></details>
+                </article>
+                <p v-if="!projectDraft.facts.length" class="picker-hint">尚无项目描述。可以添加一条，或关闭表单后让 AI 从简历填写。</p>
+                <details class="project-extra-fields"><summary>其他信息（可选）</summary><div class="project-fields"><label>角色<input v-model="projectDraft.role" /></label><label>周期<input v-model="projectDraft.duration" /></label></div></details>
+                <details class="resume-picker"><summary>从简历 v{{ formSourceVersion }} 原文补充描述（辅助） <small>逐字回填，不调用模型</small></summary><p class="picker-hint">勾选段落会同时填入事实内容与原文引用；可继续编辑类型和措辞。未找到项目段落时请手动添加。</p><p v-if="!resumeBlocksBusy && resumeBlocks.length && !hasProjectBlock" class="picker-hint">未在简历原文中发现明显的项目段落，可手动填写事实。</p><div v-if="resumeBlocksBusy" class="picker-hint">正在读取简历原文…</div><div v-else-if="resumeBlocks.length" class="picker-list"><label v-for="(block, index) in resumeBlocks" :key="index" class="picker-block"><input type="checkbox" :checked="selectedBlocks.includes(index)" @change="toggleBlock(index)" /><span>{{ block }}</span></label></div><p v-else class="picker-hint">未读取到可回填的简历原文，请手动填写事实。</p><p v-if="resumeBlocksTruncated" class="picker-hint">原文较长，仅显示前 {{ resumeBlocks.length }} 段；其余内容可手动引用。</p></details>
+                <label class="verified-choice"><input v-model="projectDraft.user_verified" type="checkbox" /> 我已核对项目内容</label>
+              </fieldset>
+              <div class="editor-toolbar"><span>保存后固定引用简历 v{{ formSourceVersion }}；原文不会被改写。</span><button class="button button-primary button-small" :disabled="projectBusy || !projectDraft.name.trim() || (candidateIndex !== null && !projectDraft.user_verified)" @click="saveProject()">{{ projectBusy ? '保存中…' : candidateIndex !== null && remainingCandidates.length > 1 ? '保存并核对下一个' : '保存项目' }}</button></div>
+            </section>
+            <div v-if="verifiedProjects.length && !projectFormOpen" class="materials-next"><span>当前版本已有 {{ verifiedProjects.length }} 个已核对项目</span><RouterLink :to="{ path: '/planner', query: { resume: resume.id, version: selectedVersion } }">用这些资料创建计划 →</RouterLink></div><h3 class="saved-projects-heading">已保存项目 <small>可编辑的个人资料</small></h3><div class="project-list"><article v-for="item in projects" :key="item.id" class="project-card" tabindex="0" role="button" @keydown.enter.self="openProject(item)" @keydown.space.self.prevent="openProject(item)" :class="{ selected: project?.id === item.id }" @click="openProject(item)"><div class="project-card-head"><div><span class="project-state" :class="item.user_verified ? 'verified' : ''">{{ item.user_verified ? '已核对' : '待核对' }}</span><h3>{{ item.name }}</h3></div><span class="source-version">依据 v{{ item.source_version }}</span></div><p>{{ item.summary || '暂无项目摘要。' }}</p><div class="tech-tags"><span v-for="tech in item.tech_stack" :key="tech">{{ tech }}</span></div><div class="project-facts"><div v-for="fact in item.facts.slice(0, 3)" :key="fact.id"><b>{{ fact.fact_type }}</b><span>{{ fact.content }}</span><small>{{ fact.evidence_quote ? '简历原文引用' : '手工补充' }}</small></div><button class="text-action danger-action" @click.stop="deleteProject(item)">删除项目</button></div></article><div v-if="parseBusy && !projects.length" class="no-projects"><span>正在等待提取候选…</span><p>后台任务完成后，候选会显示在上方；仍需人工核对才能保存为项目。</p></div><div v-else-if="!projects.length && !parseDraft?.result?.projects.length" class="no-projects"><span>尚未保存项目</span><p>添加已核对项目，或从当前保存版本提取候选后人工核对。</p><button class="text-action" :disabled="projectBusy || loading" @click="newProject()">添加第一个项目 →</button></div></div>
           </section>
         </template>
-        <div v-else class="materials-empty"><p class="eyebrow">MATERIALS, WITH PROVENANCE</p><h2>先保留原件，<br />再核对事实。</h2><p>上传 PDF 或新建文字简历。提取只生成可编辑草稿，保存后才形成版本。</p><label class="button button-primary file-button">上传 PDF<input type="file" accept="application/pdf,.pdf" @change="uploadPdf(($event.target as HTMLInputElement).files?.[0])" /></label></div>
+        <div v-else class="materials-empty"><p class="eyebrow">MATERIALS, WITH PROVENANCE</p><h2>上传简历，<br />让 AI 填写项目。</h2><p>上传并核对简历文字后，AI 会把项目名称、技术栈、简介和多条描述填入表单。仅练题库可直接跳过这里。</p><label class="button button-primary file-button">上传 PDF<input type="file" accept="application/pdf,.pdf" @change="uploadPdf(($event.target as HTMLInputElement).files?.[0])" /></label></div>
       </section>
     </div>
-    <div v-if="busy || loading || parseBusy" class="busy-banner"><span class="spinner"></span>{{ parseBusy ? parsingBanner : (notice || '正在处理资料…') }}</div>
+    <div v-if="busy || loading" class="busy-banner"><span class="spinner"></span>{{ notice || '正在处理资料…' }}</div>
     <div v-if="error || notice" class="toast" :class="{ 'toast-error': error }" role="status"><span>{{ error || notice }}</span><button @click="error = ''; notice = ''">×</button></div>
   </main>
 </template>

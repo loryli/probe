@@ -85,12 +85,12 @@ def stale(message: str) -> PlannerError:
 VERSION_PATTERN = re.compile(r"简历\s*(?:版本\s*)?[vV](\d+)\b")
 
 
-def foreign_versions(text: str, source_version: int) -> bool:
+def foreign_versions(text: str, source_version: int | None) -> bool:
     """只检查明确标记为简历的版本号，不把技术版本误当简历版本。"""
     return any(int(value) != source_version for value in VERSION_PATTERN.findall(text))
 
 
-def filter_model_notes(items: list[str], source_version: int) -> tuple[list[str], int]:
+def filter_model_notes(items: list[str], source_version: int | None) -> tuple[list[str], int]:
     """模型自评不是事实；含未核验版本号的条目直接剔除。"""
     accepted: list[str] = []
     removed = 0
@@ -126,6 +126,11 @@ def compile_runtime_context(
         ]
         if objective.observable_evidence:
             lines.append("可观察证据：" + "；".join(objective.observable_evidence))
+        wanted_facts = set(objective.project_fact_ids)
+        for project in snapshot.projects:
+            if any(fact.id in wanted_facts for fact in project.facts):
+                lines.append(f"项目简介（{project.name}）：{project.summary[:500] or '未提供'}")
+                lines.append(f"项目角色与周期：{project.role or '未提供'}｜{project.duration or '未提供'}")
         for fact_id in objective.project_fact_ids:
             fact_item = facts.get(str(fact_id))
             if fact_item is not None:
@@ -292,15 +297,15 @@ class PlannerService:
                     )
                     for row in project_rows
                 ]
-            question_rows = await self.ordered_questions()
-            question_total = len(question_rows)
-            questions = [
-                QuestionOption(
-                    id=row.id, question_text=row.question_text[:MAX_QUESTION_TEXT_CHARS],
-                    content_version=row.content_version,
-                )
-                for row in question_rows
-            ]
+        question_rows = await self.ordered_questions()
+        question_total = len(question_rows)
+        questions = [
+            QuestionOption(
+                id=row.id, question_text=row.question_text[:MAX_QUESTION_TEXT_CHARS],
+                content_version=row.content_version,
+            )
+            for row in question_rows
+        ]
 
         return PlanOptions(
             resumes=[
@@ -329,18 +334,22 @@ class PlannerService:
     async def build_snapshot(self, inputs: PlanInputs) -> tuple[PlanSnapshot, list[str]]:
         """固定所选简历版本、已核对项目事实与启用题目，剔除无效引用。"""
         limitations: list[str] = []
-        resume = await self.session.scalar(
-            select(Resume).where(Resume.id == str(inputs.resume_id), Resume.deleted_at.is_(None))
-        )
-        if resume is None:
-            raise PlannerError("resume_not_found", "简历不存在或已删除", 404)
-        version = await self.session.get(ResumeVersion, (resume.id, inputs.source_version))
-        if version is None:
-            raise PlannerError("version_not_found", "所选简历版本不存在", 404)
+        resume = None
+        version = None
+        if inputs.resume_id is not None:
+            resume = await self.session.scalar(
+                select(Resume).where(Resume.id == str(inputs.resume_id), Resume.deleted_at.is_(None))
+            )
+            if resume is None:
+                raise PlannerError("resume_not_found", "简历不存在或已删除", 404)
+            version = await self.session.get(ResumeVersion, (resume.id, inputs.source_version))
+            if version is None:
+                raise PlannerError("version_not_found", "所选简历版本不存在", 404)
 
         project_ids = [str(item) for item in inputs.project_ids]
         project_rows: list[Project] = []
         if project_ids:
+            assert resume is not None
             project_rows = list(await self.session.scalars(
                 select(Project).where(
                     Project.id.in_(project_ids),
@@ -372,6 +381,7 @@ class PlannerService:
                 truncated_facts = True
             projects.append(SnapshotProject(
                 id=row.id, revision=row.revision, name=row.name,
+                summary=row.summary, duration=row.duration,
                 role=row.role, tech_stack=row.tech_stack,
                 facts=[
                     SnapshotFact(
@@ -411,8 +421,8 @@ class PlannerService:
             for row in question_rows
         ]
         return PlanSnapshot(
-            snapshot_version=2, resume_id=resume.id, resume_name=resume.name,
-            source_version=inputs.source_version, content_sha256=version.content_sha256,
+            snapshot_version=2, resume_id=resume.id if resume else None, resume_name=resume.name if resume else "",
+            source_version=inputs.source_version, content_sha256=version.content_sha256 if version else "",
             projects=projects, questions=snapshot_questions,
         ), limitations
 
@@ -476,7 +486,8 @@ class PlannerService:
                 ))
         return PlannerDraft(
             schema_version=SCHEMA_VERSION,
-            session_summary=f"依据简历 v{inputs.source_version}、已核对项目与启用题库生成的规则计划",
+            session_summary=(f"依据简历 v{inputs.source_version}、已核对项目与启用题库生成的规则计划"
+                             if inputs.resume_id else "仅依据所选题库原题生成的练习计划，不需要简历"),
             objectives=objectives,
             limitations=limitations,
         )
@@ -593,9 +604,7 @@ class PlannerService:
                 objective.time_budget_sec = seconds
 
         # 追问配额先给每个有意愿的目标保底一次，再按优先级分配剩余额度。
-        max_total = inputs.max_total_followups or min(
-            12, max(3, inputs.duration_minutes // 5)
-        )
+        max_total = (inputs.max_total_followups or min(12, max(3, inputs.duration_minutes // 5))) if inputs.resume_id else 0
         cap = min(3, max_total)
         desired = [max(0, min(item.max_followups, cap)) for item in objectives]
         if sum(desired) <= max_total:
@@ -647,9 +656,12 @@ class PlannerService:
             "目标时长仅作节奏参考，到时不强制结束；追问受总上限与各目标上限约束。",
             "计划只含考察目标与预算，不含固定问题清单；具体问题由后续面试环节动态生成。",
         ]
+        if inputs.resume_id is None:
+            policy_notes.append("纯题库练习只使用冻结的题库原题，不生成项目题或额外追问；AI 可用于回答反馈与复盘。")
         if mode == "rule":
             policy_notes.append(
-                "本计划由规则模式生成，未调用模型；配置好 Qwen 后可重新生成。"
+                "本计划由规则整理题库范围，未调用模型；练习时可选择 AI 反馈或规则练习。"
+                if inputs.resume_id is None else "本计划由规则模式生成，未调用模型；配置好 Qwen 后可重新生成。"
             )
 
         project_count = sum(
@@ -729,7 +741,7 @@ class PlannerService:
                 )
                 row = InterviewPlan(
                     id=plan_id,
-                    resume_id=str(inputs.resume_id),
+                    resume_id=str(inputs.resume_id) if inputs.resume_id else None,
                     source_version=inputs.source_version,
                     status="running",
                     provider="qwen" if inputs.mode == "model" else "rule",
@@ -837,6 +849,12 @@ class PlannerService:
         """旧计划仅供历史查看，不能靠读取今天的资料补造历史快照。"""
         snapshot = PlanSnapshot.model_validate(row.snapshot_json)
         result = PlanOutput.model_validate(row.result_json)
+        if snapshot.resume_id is None and (
+            snapshot.source_version is not None or snapshot.projects
+            or any(item.source_preference != "question_bank" or item.max_followups for item in result.objectives)
+            or result.constraints.max_total_followups
+        ):
+            raise PlannerError("invalid_plan_source", "纯题库计划只能包含题库原题，不能包含项目题或额外追问", 409)
         if (row.schema_version != SCHEMA_VERSION or result.schema_version != SCHEMA_VERSION
                 or snapshot.snapshot_version != 2 or result.candidate_scope is None
                 or any(project.revision is None for project in snapshot.projects)
@@ -945,14 +963,17 @@ class PlannerService:
     async def verify_references(self, row: InterviewPlan) -> None:
         """确认前复核固定引用：资料被编辑或停用后不悄悄沿用旧计划。"""
         snapshot, _ = self.current_contract(row)
-        resume = await self.session.scalar(select(Resume).where(
-            Resume.id == row.resume_id, Resume.deleted_at.is_(None),
-        ).with_for_update())
-        if resume is None:
-            raise stale("简历已删除，请选择有效资料重新生成计划")
-        version = await self.session.get(ResumeVersion, (row.resume_id, row.source_version))
-        if version is None or version.content_sha256 != snapshot.content_sha256:
-            raise stale("所选简历版本已变化，请重新生成计划")
+        if snapshot.resume_id != row.resume_id or snapshot.source_version != row.source_version:
+            raise stale("计划资料标识与冻结快照不一致，请重新生成")
+        if row.resume_id is not None:
+            resume = await self.session.scalar(select(Resume).where(
+                Resume.id == row.resume_id, Resume.deleted_at.is_(None),
+            ).with_for_update())
+            if resume is None:
+                raise stale("简历已删除，请选择有效资料重新生成计划")
+            version = await self.session.get(ResumeVersion, (row.resume_id, row.source_version))
+            if version is None or version.content_sha256 != snapshot.content_sha256:
+                raise stale("所选简历版本已变化，请重新生成计划")
         project_ids = [str(item.id) for item in snapshot.projects]
         if project_ids:
             projects = list(await self.session.scalars(

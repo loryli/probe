@@ -7,7 +7,7 @@ from interview_assistant.interview.schemas import ObjectiveProgress, SessionProg
 from interview_assistant.planner.schemas import PlanRuntime, PlanRuntimeObjective
 from interview_assistant.planner.text import plain_text
 
-PROMPT_VERSION = "interview_prompt.v4"
+PROMPT_VERSION = "interview_prompt.v5"
 DECISION_SCHEMA_VERSION = "interview_decision.v2"
 QUESTION_SCHEMA_VERSION = "interview_question.v1"
 OUTLINE_PROMPT_VERSION = "interview_outline_prompt.v2"
@@ -178,8 +178,11 @@ def decision_messages(
         followups_remaining=followups_remaining, base_remaining=base_remaining,
         asked=asked, avoid=avoid,
     )
+    system = DECISION_SYSTEM_PROMPT
+    if runtime.resume_id is None:
+        system += "\n本场为纯题库练习：只评价当前回答并填写 observation/reason/objective_status；say、next_question、follow_up_question 留空，follow_up_needed=false。下一题由服务端从题库原题选择，不生成或改写问题。"
     return [
-        ModelMessage(role="system", content=DECISION_SYSTEM_PROMPT),
+        ModelMessage(role="system", content=system),
         ModelMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
     ]
 
