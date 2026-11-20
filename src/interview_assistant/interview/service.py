@@ -15,10 +15,14 @@ from interview_assistant.ai.qwen import ModelError, QwenModel, configuration_sta
 from interview_assistant.config import Settings
 from interview_assistant.database import utc_now
 from interview_assistant.interview import rules, variety
+from interview_assistant.interview.analysis import TurnAnalysisService
 from interview_assistant.interview.models import (
+    InterviewAnalysisJob,
     InterviewReport,
     InterviewSession,
     InterviewTurn,
+    MemoryEvidence,
+    SessionObservation,
 )
 from interview_assistant.interview.prompt import (
     DECISION_SCHEMA_VERSION,
@@ -116,6 +120,7 @@ class InterviewService:
         self.questions = QuestioningService(self)
         self.opening = OpeningService(self)
         self.reports = ReportService(self)
+        self.analyses = TurnAnalysisService(session, settings)
 
     # ---------- 读取 ----------
 
@@ -380,7 +385,16 @@ class InterviewService:
                         "进行中的场次不能删除，请先结束或暂停这场面试",
                         409,
                     )
-            # 删除顺序：复盘 → 回答轮（持有 answers_turn_id 引用）→ 问题轮 → 场次。
+            # 删除顺序：记忆证据 → 观察 → 分析任务 → 复盘 → 回答轮 → 问题轮 → 场次。
+            await self.session.execute(
+                delete(MemoryEvidence).where(MemoryEvidence.session_id.in_(ids))
+            )
+            await self.session.execute(
+                delete(SessionObservation).where(SessionObservation.session_id.in_(ids))
+            )
+            await self.session.execute(
+                delete(InterviewAnalysisJob).where(InterviewAnalysisJob.session_id.in_(ids))
+            )
             await self.session.execute(
                 delete(InterviewReport).where(InterviewReport.session_id.in_(ids))
             )
@@ -708,6 +722,8 @@ class InterviewService:
                 )
                 self.session.add(answer_turn)
                 await self.session.flush()
+                # 与回答同事务创建幂等任务；后台执行失败不能影响回答和实时决策。
+                await self.analyses.enqueue(row, answer_turn)
                 # 回答已落库；清空当前问题指针，下一步决策失败时可按回答续接。
                 row.current_turn_id = None
                 row.updated_at = utc_now()
@@ -1102,6 +1118,7 @@ class InterviewService:
 
     async def resume(self, session_id: str, payload: SessionControl) -> SessionRead:
         pending_opening: str | None = None
+        pending_technical: str | None = None
         async with self.session.begin():
             row = await self.require_session(session_id, lock=True)
             if row.status == "completed":
@@ -1114,20 +1131,41 @@ class InterviewService:
                 close_pause(progress, now, row.updated_at)
                 row.progress_json = progress.model_dump(mode="json")
                 row.status = "active"
-                row.error_code = None
-                row.error_message = None
                 row.updated_at = now
                 await self.session.flush()
             turns = await self.turns(session_id)
             progress = SessionProgress.model_validate(row.progress_json)
-            pending_opening = next((turn.id for turn in turns
-                                    if turn.role == "candidate" and turn.decision_json is None
-                                    and turn.answers_turn_id in progress.opening_questions.values()), None)
+            pending = next(
+                (
+                    turn
+                    for turn in reversed(turns)
+                    if turn.role == "candidate" and turn.decision_json is None
+                ),
+                None,
+            )
+            if pending is not None:
+                if pending.answers_turn_id in progress.opening_questions.values():
+                    pending_opening = pending.id
+                    row.error_code = None
+                    row.error_message = None
+                else:
+                    pending_technical = pending.id
+                    # 恢复场次不自动重发可能收费的模型调用。此前决策若已失败，保留
+                    # 原因；若是在暂停并发窗口中被丢弃，则补一个可操作的恢复状态。
+                    if row.error_code is None:
+                        row.error_code = "decision_pending"
+                        row.error_message = "回答已保存；请点击“重试下一步”继续生成问题"
+            else:
+                row.error_code = None
+                row.error_message = None
+            await self.session.flush()
             result = self.read(row, turns)
         # 恢复按钮是明确的继续操作；接续被暂停拦下的原介绍，不重存回答或重复推进。
         if pending_opening is not None:
             await self._run_decision(session_id, pending_opening, emit=None)
             return await self.get(session_id)
+        if pending_technical is not None:
+            return result
         if result.phase != "technical" and result.current_turn is None:
             await self._ask_next(session_id)
             return await self.get(session_id)

@@ -1,4 +1,12 @@
-import type { InterviewSession, SessionOptions, SessionPage, SessionReport } from '../types'
+import type {
+  InterviewSession,
+  MemoryCandidate,
+  SessionOptions,
+  SessionPage,
+  SessionReport,
+  TurnAnalysisJob,
+  TurnAnalysisPage,
+} from '../types'
 
 export class ApiError extends Error {
   constructor(
@@ -62,6 +70,19 @@ export const interviewApi = {
   control: (id: string, action: 'pause' | 'resume' | 'skip' | 'end', revision: number) =>
     request<InterviewSession>(`/interviews/${id}/${action}`, json({ expected_revision: revision }), 330_000),
   report: (id: string) => request<SessionReport>(`/interviews/${id}/report`),
+  analyses: (id: string) => request<TurnAnalysisPage>(`/interviews/${id}/analyses`),
+  retryAnalysis: (id: string, jobId: string) => request<TurnAnalysisJob>(
+    `/interviews/${id}/analyses/${jobId}/retry`, { method: 'POST' },
+  ),
+  updateMemoryCandidate: (
+    id: string,
+    candidateId: string,
+    status: 'confirmed' | 'rejected',
+    expectedRevision: number,
+  ) => request<MemoryCandidate>(
+    `/interviews/${id}/memory-candidates/${candidateId}`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, expected_revision: expectedRevision }) },
+  ),
   createReport: (id: string, requestId: string) => request<SessionReport>(
     `/interviews/${id}/report`, json({ request_id: requestId }), 330_000,
   ),

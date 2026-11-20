@@ -15,6 +15,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from interview_assistant.ai.qwen import ModelError, QwenModel, configuration_status
 from interview_assistant.config import Settings
 from interview_assistant.database import utc_now
+from interview_assistant.interview.models import MemoryEvidence
 from interview_assistant.materials.models import Project, ProjectFact, Resume, ResumeVersion
 from interview_assistant.planner.models import InterviewPlan
 from interview_assistant.planner.prompt import (
@@ -52,6 +53,8 @@ from interview_assistant.planner.schemas import (
     QuestionOption,
     ResumeOption,
     SnapshotFact,
+    SnapshotMemoryEvidence,
+    SnapshotMemoryQuote,
     SnapshotProject,
     SnapshotQuestion,
     VersionOption,
@@ -421,10 +424,31 @@ class PlannerService:
             )
             for row in question_rows
         ]
+        memory_rows = list(await self.session.scalars(
+            select(MemoryEvidence)
+            .where(MemoryEvidence.status == "confirmed")
+            .order_by(MemoryEvidence.observed_at.desc(), MemoryEvidence.id)
+            .limit(30)
+        ))
+        memories = [
+            SnapshotMemoryEvidence(
+                id=row.id,
+                topic_key=row.topic_key,
+                observation_type=row.observation_type,
+                statement=row.statement,
+                direction=row.direction,
+                confidence=row.confidence,
+                evidence=[
+                    SnapshotMemoryQuote.model_validate(item) for item in row.evidence_json
+                ],
+                observed_at=row.observed_at,
+            )
+            for row in memory_rows
+        ]
         return PlanSnapshot(
             snapshot_version=2, resume_id=resume.id if resume else None, resume_name=resume.name if resume else "",
             source_version=inputs.source_version, content_sha256=version.content_sha256 if version else "",
-            projects=projects, questions=snapshot_questions,
+            projects=projects, questions=snapshot_questions, memories=memories,
         ), limitations
 
     @staticmethod

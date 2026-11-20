@@ -128,6 +128,82 @@ export interface SessionReport {
   updated_at: string
 }
 
+export interface TurnAnalysisEvidence {
+  turn_id: string
+  quote: string
+}
+
+export interface MemoryCandidate {
+  id: string
+  source_observation_id: string
+  turn_id: string
+  topic_key: string
+  observation_type: string
+  statement: string
+  direction: 'supports' | 'contradicts' | 'unknown'
+  confidence: number
+  evidence: TurnAnalysisEvidence[]
+  status: 'pending' | 'confirmed' | 'rejected'
+  revision: number
+  observed_at: string
+  decided_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TurnAnalysisJob {
+  id: string
+  session_id: string
+  turn_id: string
+  status: 'pending' | 'running' | 'ready' | 'failed'
+  attempt_count: number
+  retryable: boolean
+  result: {
+    schema_version: 'turn_analysis.v1'
+    turn_id: string
+    knowledge_points: Array<{
+      topic: string
+      coverage: 'covered' | 'partial' | 'missing' | 'uncertain'
+    }>
+    observations: Array<{
+      type: 'strength' | 'missing_detail' | 'incorrect' | 'unverified_claim' | 'communication'
+      topic: string
+      statement: string
+      confidence: number
+      evidence: TurnAnalysisEvidence[]
+    }>
+    technical_accuracy: {
+      label: 'accurate' | 'plausible_incomplete' | 'incorrect' | 'uncertain'
+      reason: string
+      evidence: TurnAnalysisEvidence[]
+    }
+    followup_suggestions: string[]
+    warnings: string[]
+  } | null
+  observations: Array<{
+    id: string
+    topic: string
+    observation_type: string
+    statement: string
+    confidence: number
+    evidence: TurnAnalysisEvidence[]
+    created_at: string
+  }>
+  memory_candidates: MemoryCandidate[]
+  elapsed_ms: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface TurnAnalysisPage {
+  items: TurnAnalysisJob[]
+}
+
 export interface SessionPage {
   items: SessionSummary[]
   total: number

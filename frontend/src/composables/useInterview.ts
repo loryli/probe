@@ -1,7 +1,13 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ApiError, interviewApi } from '../api/interviews'
-import type { InterviewSession, SessionOptions, SessionReport, SessionSummary } from '../types'
+import type {
+  InterviewSession,
+  SessionOptions,
+  SessionReport,
+  SessionSummary,
+  TurnAnalysisJob,
+} from '../types'
 
 export type InterviewPhase = 'idle' | 'loading' | 'answering' | 'saving' | 'streaming' | 'recovering' | 'control' | 'report'
 
@@ -12,6 +18,10 @@ export function useInterview() {
   const sessions = ref<SessionSummary[]>([])
   const session = ref<InterviewSession | null>(null)
   const report = ref<SessionReport | null>(null)
+  const analyses = ref<TurnAnalysisJob[]>([])
+  const analysisBusyIds = ref<string[]>([])
+  const memoryBusyIds = ref<string[]>([])
+  const analysisError = ref('')
   const selectedPlan = ref('')
   const mode = ref<'model' | 'rule'>('model')
   const answer = ref('')
@@ -29,9 +39,11 @@ export function useInterview() {
   const pendingAnswer = ref<{ turnId: string; text: string; requestId: string } | null>(null)
   const pendingReportRequest = ref<{ sessionId: string; requestId: string } | null>(null)
   let recoveryTimer: number | undefined
+  let analysisTimer: number | undefined
   let recoveryDeadline = 0
   let recoveryKey = ''
   let readGeneration = 0
+  let analysisGeneration = 0
   let mutationGeneration = 0
   let disposed = false
 
@@ -40,6 +52,7 @@ export function useInterview() {
   const isLocked = computed(() => ['loading', 'saving', 'streaming', 'recovering', 'control', 'report'].includes(phase.value))
   const canAnswer = computed(() => session.value?.id === sessionId.value && session.value?.status === 'active' && !!currentQuestion.value && !isLocked.value)
   const availablePlans = computed(() => options.value?.plans.filter((plan) => plan.usable) ?? [])
+  const analysisFor = (turnId: string) => analyses.value.find((item) => item.turn_id === turnId) ?? null
 
   function confirmDiscard() {
     return (!answer.value.trim() && !preservedAnswer.value) || window.confirm('当前有未提交的回答草稿。离开会放弃草稿，仍要继续吗？')
@@ -49,7 +62,7 @@ export function useInterview() {
     const previous = session.value
     if (previous?.id === next.id && next.revision < previous.revision) return
     if (previous?.id !== next.id) {
-      answer.value = ''; preservedAnswer.value = null; report.value = null; liveText.value = ''
+      answer.value = ''; preservedAnswer.value = null; report.value = null; analyses.value = []; liveText.value = ''
     } else if (previous?.current_turn && previous.current_turn.id !== next.current_turn?.id && answer.value.trim()) {
       const sequence = previous.current_turn.sequence
       const saved = next.turns.some((turn) => turn.role === 'candidate'
@@ -72,6 +85,78 @@ export function useInterview() {
     if (recoveryTimer) window.clearTimeout(recoveryTimer)
   }
 
+  function stopAnalysisPolling() {
+    if (analysisTimer) window.clearTimeout(analysisTimer)
+    analysisTimer = undefined
+  }
+
+  async function loadAnalyses(id: string, keepPolling = true) {
+    if (!id) return
+    const token = ++analysisGeneration
+    stopAnalysisPolling()
+    try {
+      const page = await interviewApi.analyses(id)
+      if (disposed || token !== analysisGeneration || sessionId.value !== id) return
+      analyses.value = page.items
+      analysisError.value = ''
+      const waiting = page.items.some((item) =>
+        (item.status === 'pending' || item.status === 'running') && !item.retryable)
+      if (keepPolling && waiting) {
+        analysisTimer = window.setTimeout(() => void loadAnalyses(id), 2_000)
+      }
+    } catch (cause) {
+      if (disposed || token !== analysisGeneration || sessionId.value !== id) return
+      analysisError.value = cause instanceof Error ? cause.message : '逐轮分析状态读取失败。'
+    }
+  }
+
+  async function retryAnalysis(jobId: string) {
+    const id = session.value?.id
+    if (!id || analysisBusyIds.value.includes(jobId)) return
+    analysisBusyIds.value = [...analysisBusyIds.value, jobId]
+    analysisError.value = ''
+    try {
+      const next = await interviewApi.retryAnalysis(id, jobId)
+      if (sessionId.value !== id) return
+      analyses.value = analyses.value.map((item) => item.id === next.id ? next : item)
+      await loadAnalyses(id)
+    } catch (cause) {
+      if (sessionId.value === id) {
+        analysisError.value = cause instanceof Error ? cause.message : '逐轮分析重试失败。'
+      }
+    } finally {
+      analysisBusyIds.value = analysisBusyIds.value.filter((item) => item !== jobId)
+    }
+  }
+
+  async function updateMemoryCandidate(
+    candidateId: string,
+    status: 'confirmed' | 'rejected',
+    expectedRevision: number,
+  ) {
+    const id = session.value?.id
+    if (!id || memoryBusyIds.value.includes(candidateId)) return
+    memoryBusyIds.value = [...memoryBusyIds.value, candidateId]
+    analysisError.value = ''
+    try {
+      const next = await interviewApi.updateMemoryCandidate(
+        id, candidateId, status, expectedRevision,
+      )
+      if (sessionId.value !== id) return
+      analyses.value = analyses.value.map((job) => ({
+        ...job,
+        memory_candidates: job.memory_candidates.map((item) =>
+          item.id === next.id ? next : item),
+      }))
+    } catch (cause) {
+      if (sessionId.value === id) {
+        analysisError.value = cause instanceof Error ? cause.message : '记忆候选状态更新失败。'
+      }
+    } finally {
+      memoryBusyIds.value = memoryBusyIds.value.filter((item) => item !== candidateId)
+    }
+  }
+
   async function loadSession(id: string, recover = false) {
     if (!id) return
     const token = ++readGeneration
@@ -87,6 +172,7 @@ export function useInterview() {
         phase.value = 'idle'
       }
       if (next.status === 'completed') await loadReport(id)
+      void loadAnalyses(id)
     } catch (cause) {
       if (token !== readGeneration || sessionId.value !== id) return
       error.value = cause instanceof Error ? cause.message : '读取本场失败。'
@@ -232,6 +318,7 @@ export function useInterview() {
       phase.value = 'idle'
       notice.value = ''
       if (finalState.status === 'completed') await loadReport(finalState.id)
+      void loadAnalyses(finalState.id)
       sessions.value = (await interviewApi.list()).items
     } catch (cause) {
       if (disposed || token !== mutationGeneration || sessionId.value !== active.id) return
@@ -339,6 +426,9 @@ export function useInterview() {
     closeStream()
     session.value = null
     report.value = null
+    analyses.value = []
+    analysisError.value = ''
+    stopAnalysisPolling()
     answer.value = ''
     preservedAnswer.value = null
     liveText.value = ''
@@ -358,7 +448,7 @@ export function useInterview() {
     const currentDeleted = !!session.value && ids.includes(session.value.id)
     const confirmed = window.confirm(
       `永久删除选中的 ${ids.length} 场练习记录？\n\n`
-      + '全部问答、目标进度与整场复盘会一起删除，不可恢复；已确认的面试计划不受影响。'
+      + '全部问答、目标进度、逐轮分析、记忆证据与整场复盘会一起删除，不可恢复；已确认的面试计划不受影响。'
       + (currentDeleted ? '当前打开的场次与未提交的回答草稿也会一并丢弃。' : ''),
     )
     if (!confirmed) return false
@@ -376,6 +466,9 @@ export function useInterview() {
         liveText.value = ''
         session.value = null
         report.value = null
+        analyses.value = []
+        analysisError.value = ''
+        stopAnalysisPolling()
         phase.value = 'idle'
         await router.push('/interviews')
       }
@@ -406,30 +499,36 @@ export function useInterview() {
   watch(sessionId, async (id) => {
     ++mutationGeneration
     ++readGeneration
-    closeStream(); recoveryKey = ''; reportBusy.value = false; liveText.value = ''
+    ++analysisGeneration
+    closeStream(); stopAnalysisPolling(); recoveryKey = ''; reportBusy.value = false; liveText.value = ''
     if (id && id !== session.value?.id) {
-      session.value = null; report.value = null; answer.value = ''; preservedAnswer.value = null
+      session.value = null; report.value = null; analyses.value = []; answer.value = ''; preservedAnswer.value = null
       await loadSession(id, true)
     }
     else if (!id) {
       closeStream()
       session.value = null
       report.value = null
+      analyses.value = []
       answer.value = ''; preservedAnswer.value = null
       phase.value = 'idle'
     }
   })
   onBeforeUnmount(() => {
     disposed = true; ++mutationGeneration; ++readGeneration
-    closeStream()
+    ++analysisGeneration
+    closeStream(); stopAnalysisPolling()
     window.removeEventListener('beforeunload', protectDraft)
   })
 
   return {
-    options, sessions, session, report, selectedPlan, mode, answer, preservedAnswer, restoreAnswer, liveText, phase,
+    options, sessions, session, report, analyses, analysisBusyIds, memoryBusyIds,
+    analysisError, analysisFor,
+    selectedPlan, mode, answer, preservedAnswer, restoreAnswer, liveText, phase,
     pageBusy, reportBusy, deleteBusy, checkedSessionIds, error, notice, sessionId,
     currentQuestion, isLocked, canAnswer,
     availablePlans, initialize, start, submitAnswer, retry, control, refresh,
-    generateReport, loadSession, loadReport, newSession, deleteSessions,
+    generateReport, loadSession, loadReport, loadAnalyses, retryAnalysis,
+    updateMemoryCandidate, newSession, deleteSessions,
   }
 }

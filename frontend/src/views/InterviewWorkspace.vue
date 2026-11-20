@@ -78,6 +78,19 @@ function objectiveFor(turn: InterviewTurn) {
 function statusText(status: string) {
   return ({ covered: '已覆盖', skipped: '已略过', active: '进行中', pending: '待进入' } as Record<string, string>)[status] ?? status
 }
+function accuracyText(label?: string) {
+  return ({ accurate: '基本准确', plausible_incomplete: '方向合理但不完整', incorrect: '存在技术问题', uncertain: '暂无法判断' } as Record<string, string>)[label ?? ''] ?? '分析完成'
+}
+function coverageText(value: string) {
+  return ({ covered: '已覆盖', partial: '部分覆盖', missing: '未覆盖', uncertain: '待确认' } as Record<string, string>)[value] ?? value
+}
+function retryTurnAnalysis(turnId: string) {
+  const job = interview.analysisFor(turnId)
+  if (job) void interview.retryAnalysis(job.id)
+}
+function memoryStatusText(status: string) {
+  return ({ pending: '待确认', confirmed: '已确认', rejected: '已忽略' } as Record<string, string>)[status] ?? status
+}
 function formatDate(value: string) {
   return new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
@@ -228,6 +241,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
             <button v-if="interview.session.value.status === 'active' && (interview.session.value.error_code || (!interview.currentQuestion.value && !interview.isLocked.value))" class="inline-action" type="button" :disabled="interview.isLocked.value" @click="interview.retry()">重试下一步 <span aria-hidden="true">↗</span></button>
             <button v-else-if="interview.phase.value === 'recovering'" class="inline-action" type="button" @click="interview.refresh()">重新读取</button>
           </div>
+          <div v-if="interview.analysisError.value" class="analysis-page-error" role="status">逐轮分析：{{ interview.analysisError.value }} <button type="button" @click="interview.loadAnalyses(interview.session.value.id)">重新读取</button></div>
 
           <div ref="transcript" class="conversation-scroll">
             <article v-for="turn in interview.session.value.turns" :id="`turn-${turn.sequence}`" :key="turn.id" tabindex="-1" class="turn-row" :class="`turn-${turn.role}`">
@@ -237,6 +251,31 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
                 <p class="turn-text">{{ turn.text }}</p>
                 <div v-if="turn.stage === 'self_introduction' || turn.stage === 'project_introduction'" class="turn-source">{{ turn.stage === 'self_introduction' ? '开场 · 自我介绍' : '开场 · 项目介绍' }}</div><div v-else-if="turn.role === 'interviewer' && objectiveFor(turn)" class="turn-source">{{ objectiveFor(turn)?.source === 'project' ? '项目事实' : '个人题库' }} <span>·</span> {{ objectiveFor(turn)?.topic }}</div>
                 <div v-if="turn.role === 'candidate' && turn.decision?.observation" class="turn-observation">本轮观察：{{ turn.decision.observation }}</div>
+                <div v-if="turn.role === 'candidate' && interview.analysisFor(turn.id)" class="turn-analysis">
+                  <div v-if="['pending', 'running'].includes(interview.analysisFor(turn.id)?.status ?? '') && !interview.analysisFor(turn.id)?.retryable" class="analysis-running"><span class="spinner"></span><span>逐轮分析进行中，不影响下一题</span></div>
+                  <div v-else-if="interview.analysisFor(turn.id)?.status === 'failed' || interview.analysisFor(turn.id)?.retryable" class="analysis-failed"><span>{{ interview.analysisFor(turn.id)?.error_message || '逐轮分析未完成' }}</span><button v-if="interview.analysisFor(turn.id)?.retryable" type="button" :disabled="interview.analysisBusyIds.value.includes(interview.analysisFor(turn.id)?.id ?? '')" @click="retryTurnAnalysis(turn.id)">{{ interview.analysisBusyIds.value.includes(interview.analysisFor(turn.id)?.id ?? '') ? '正在重试…' : '重试分析' }}</button></div>
+                  <details v-else-if="interview.analysisFor(turn.id)?.result" class="analysis-result">
+                    <summary><span>逐轮分析</span><strong>{{ accuracyText(interview.analysisFor(turn.id)?.result?.technical_accuracy.label) }}</strong></summary>
+                    <div class="analysis-result-body">
+                      <p>{{ interview.analysisFor(turn.id)?.result?.technical_accuracy.reason }}</p>
+                      <div v-if="interview.analysisFor(turn.id)?.result?.knowledge_points.length" class="analysis-topics"><span v-for="item in interview.analysisFor(turn.id)?.result?.knowledge_points" :key="`${item.topic}-${item.coverage}`">{{ item.topic }} · {{ coverageText(item.coverage) }}</span></div>
+                      <ul v-if="interview.analysisFor(turn.id)?.result?.observations.length"><li v-for="item in interview.analysisFor(turn.id)?.result?.observations" :key="`${item.type}-${item.statement}`"><strong>{{ item.topic }}</strong>：{{ item.statement }}<blockquote v-for="evidence in item.evidence" :key="evidence.quote">“{{ evidence.quote }}”</blockquote></li></ul>
+                      <p v-if="interview.analysisFor(turn.id)?.result?.warnings.length" class="analysis-warning">{{ interview.analysisFor(turn.id)?.result?.warnings.join('；') }}</p>
+                      <section v-if="interview.analysisFor(turn.id)?.memory_candidates.length" class="memory-candidates" aria-label="结构化记忆候选">
+                        <h4>记忆证据候选</h4>
+                        <p>只有你确认的证据才会保留为长期记忆；单条证据不代表能力定论。</p>
+                        <article v-for="item in interview.analysisFor(turn.id)?.memory_candidates" :key="item.id" class="memory-candidate">
+                          <div><strong>{{ item.topic_key }}</strong><span :class="`memory-${item.status}`">{{ memoryStatusText(item.status) }}</span></div>
+                          <p>{{ item.statement }}</p>
+                          <div class="memory-actions">
+                            <button type="button" :disabled="interview.memoryBusyIds.value.includes(item.id) || item.status === 'confirmed'" @click="interview.updateMemoryCandidate(item.id, 'confirmed', item.revision)">确认保留</button>
+                            <button type="button" :disabled="interview.memoryBusyIds.value.includes(item.id) || item.status === 'rejected'" @click="interview.updateMemoryCandidate(item.id, 'rejected', item.revision)">忽略</button>
+                          </div>
+                        </article>
+                      </section>
+                    </div>
+                  </details>
+                </div>
               </div>
               <div v-if="turn.role === 'candidate'" class="turn-avatar candidate-avatar">我</div>
             </article>
@@ -280,7 +319,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
   <dialog ref="recordDialogEl" class="record-dialog" aria-labelledby="record-dialog-title" @click.self="closeRecordDialog()" @close="onRecordDialogClose()" @cancel="onRecordDialogCancel($event)">
     <div class="record-dialog-inner">
       <header class="record-dialog-head"><div><p class="eyebrow">PRACTICE RECORDS</p><h2 id="record-dialog-title">批量删除练习记录</h2></div><button class="record-dialog-close" type="button" aria-label="关闭记录管理" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">×</button></header>
-      <p class="record-dialog-note">删除会连同全部问答、目标进度与整场复盘一起物理移除，不可恢复；已确认的面试计划不受影响。进行中的场次需先结束或暂停。这里列出最近 {{ interview.sessions.value.length }} 场记录。</p>
+      <p class="record-dialog-note">删除会连同全部问答、目标进度、逐轮分析、记忆证据与整场复盘一起物理移除，不可恢复；已确认的面试计划不受影响。进行中的场次需先结束或暂停。这里列出最近 {{ interview.sessions.value.length }} 场记录。</p>
       <div class="record-dialog-tools"><label><input type="checkbox" :checked="allSelectableChecked" :disabled="!selectableSessions.length || interview.deleteBusy.value" @change="onAllSessionCheck($event)" /> 全选可删记录</label><span>已选 {{ interview.checkedSessionIds.value.length }}</span></div>
       <div v-if="interview.sessions.value.length" class="record-dialog-list">
         <label v-for="item in interview.sessions.value" :key="item.id" class="record-dialog-row" :class="{ 'row-locked': item.status === 'active' }">

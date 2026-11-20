@@ -102,6 +102,22 @@ class SnapshotQuestion(InputModel):
     user_notes: str | None = None
 
 
+class SnapshotMemoryQuote(InputModel):
+    turn_id: UUID
+    quote: str
+
+
+class SnapshotMemoryEvidence(InputModel):
+    id: UUID
+    topic_key: str
+    observation_type: str
+    statement: str
+    direction: Literal["supports", "contradicts", "unknown"]
+    confidence: float
+    evidence: list[SnapshotMemoryQuote]
+    observed_at: datetime
+
+
 class PlanSnapshot(InputModel):
     """生成时固定的资料版本；确认计划时据此复核引用是否仍然有效。"""
 
@@ -112,6 +128,7 @@ class PlanSnapshot(InputModel):
     content_sha256: str
     projects: list[SnapshotProject]
     questions: list[SnapshotQuestion]
+    memories: list[SnapshotMemoryEvidence] = Field(default_factory=list)
 
 
 def planning_sources(snapshot: PlanSnapshot, inputs: PlanInputs) -> list[str]:

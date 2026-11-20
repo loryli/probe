@@ -111,6 +111,18 @@ async def run_decision(
             )
 
 
+async def run_answer_background(
+    database: Database, settings: Settings, session_id: str, answer_turn_id: str,
+) -> None:
+    """非流式提交后并行执行实时决策与逐轮分析；两者各自记录失败。"""
+    from interview_assistant.interview.analysis import run_turn_analysis
+
+    await asyncio.gather(
+        run_decision(database, settings, session_id, answer_turn_id),
+        run_turn_analysis(database, settings, session_id, answer_turn_id),
+    )
+
+
 async def run_decision_stream(
     database: Database, settings: Settings, session_id: str, answer_turn_id: str,
 ) -> None:

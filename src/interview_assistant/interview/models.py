@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     ForeignKeyConstraint,
+    Float,
     Index,
     Integer,
     String,
@@ -128,5 +129,126 @@ class InterviewReport(Base):
     request_key: Mapped[str] = mapped_column(String(36))
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class InterviewAnalysisJob(Base):
+    """逐轮后台分析任务；持久状态让失败与进程重启后都能人工续接。"""
+
+    __tablename__ = "interview_analysis_job"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "turn_id", "input_version",
+            name="uq_interview_analysis_job_input",
+        ),
+        CheckConstraint("kind IN ('background')", name="ck_interview_analysis_job_kind"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'ready', 'failed')",
+            name="ck_interview_analysis_job_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_interview_analysis_job_attempts"),
+        Index("ix_interview_analysis_job_session", "session_id", "created_at"),
+        table_options,
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="RESTRICT")
+    )
+    turn_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_turn.id", ondelete="RESTRICT")
+    )
+    kind: Mapped[str] = mapped_column(String(16), default="background")
+    status: Mapped[str] = mapped_column(String(8), default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    input_version: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), default="qwen")
+    model: Mapped[str] = mapped_column(String(150), default="")
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(64))
+    result_json: Mapped[dict[str, JsonValue] | None] = mapped_column(JSON)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    attempt_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class SessionObservation(Base):
+    """带回答证据的本场观察；不等同于长期记忆或能力定论。"""
+
+    __tablename__ = "session_observation"
+    __table_args__ = (
+        Index("ix_session_observation_session", "session_id", "created_at"),
+        Index("ix_session_observation_turn", "turn_id"),
+        table_options,
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_analysis_job.id", ondelete="RESTRICT")
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="RESTRICT")
+    )
+    turn_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_turn.id", ondelete="RESTRICT")
+    )
+    objective_id: Mapped[str | None] = mapped_column(String(16))
+    topic: Mapped[str] = mapped_column(String(80))
+    observation_type: Mapped[str] = mapped_column(String(32))
+    statement: Mapped[str] = mapped_column(String(500))
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence_json: Mapped[list[dict[str, JsonValue]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class MemoryEvidence(Base):
+    """由本场观察派生、必须经用户确认的长期记忆证据候选。"""
+
+    __tablename__ = "memory_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_observation_id", name="uq_memory_evidence_observation",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'rejected')",
+            name="ck_memory_evidence_status",
+        ),
+        CheckConstraint(
+            "direction IN ('supports', 'contradicts', 'unknown')",
+            name="ck_memory_evidence_direction",
+        ),
+        CheckConstraint("revision >= 1", name="ck_memory_evidence_revision"),
+        Index("ix_memory_evidence_session", "session_id", "created_at"),
+        Index("ix_memory_evidence_status", "status", "topic_key"),
+        table_options,
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_observation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("session_observation.id", ondelete="RESTRICT")
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="RESTRICT")
+    )
+    turn_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_turn.id", ondelete="RESTRICT")
+    )
+    topic_key: Mapped[str] = mapped_column(String(80))
+    observation_type: Mapped[str] = mapped_column(String(32))
+    statement: Mapped[str] = mapped_column(String(500))
+    direction: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence_json: Mapped[list[dict[str, JsonValue]]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    observed_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

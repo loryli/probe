@@ -13,8 +13,11 @@ from interview_assistant.api.dependencies import (
 )
 from interview_assistant.config import Settings
 from interview_assistant.database import Database
+from interview_assistant.interview.analysis import TurnAnalysisService, run_turn_analysis
 from interview_assistant.interview.schemas import (
     AnswerSubmit,
+    MemoryCandidateRead,
+    MemoryCandidateUpdate,
     ReportCreate,
     ReportRead,
     SessionBatchDelete,
@@ -23,6 +26,8 @@ from interview_assistant.interview.schemas import (
     SessionList,
     SessionOptions,
     SessionRead,
+    TurnAnalysisJobRead,
+    TurnAnalysisList,
 )
 from interview_assistant.interview.service import InterviewError, InterviewService
 from interview_assistant.interview.streaming import (
@@ -31,7 +36,7 @@ from interview_assistant.interview.streaming import (
     broker,
     live_stream,
     replay_frames,
-    run_decision,
+    run_answer_background,
     run_decision_stream,
     stream_events,
 )
@@ -132,9 +137,9 @@ async def submit_answer(
         str(session_id), payload,
     )
     if pending_id is not None and database is not None:
-        # 决策在响应之后执行：回答已保存，用户不必盯着一个可能超时的请求。
+        # 回答已保存后，实时决策与逐轮分析并行；分析失败不影响下一题。
         background.add_task(
-            run_decision, database, settings, str(session_id), pending_id,
+            run_answer_background, database, settings, str(session_id), pending_id,
         )
     return interview
 
@@ -176,6 +181,7 @@ async def submit_answer_stream(
     live = live_stream(str(session_id), pending_id)
     if not live.running and not live.done:
         broker.spawn(run_decision_stream(database, settings, str(session_id), pending_id))
+        broker.spawn(run_turn_analysis(database, settings, str(session_id), pending_id))
     return StreamingResponse(
         answer_frames(request, interview, str(session_id), pending_id),
         media_type="text/event-stream", headers=SSE_HEADERS,
@@ -252,6 +258,64 @@ async def end_session(
     settings: SettingsDependency,
 ) -> SessionRead:
     return await InterviewService(session, settings).end(str(session_id), payload)
+
+
+@router.get(
+    "/{session_id}/analyses",
+    response_model=TurnAnalysisList,
+    summary="读取逐轮后台分析任务、结果与失败状态，不触发模型调用",
+)
+async def list_turn_analyses(
+    session_id: UUID,
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> TurnAnalysisList:
+    return await TurnAnalysisService(session, settings).list(str(session_id))
+
+
+@router.post(
+    "/{session_id}/analyses/{job_id}/retry",
+    response_model=TurnAnalysisJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="人工重试一条失败或过期的逐轮分析，不影响面试状态机",
+)
+async def retry_turn_analysis(
+    session_id: UUID,
+    job_id: UUID,
+    background: BackgroundTasks,
+    session: SessionDependency,
+    settings: SettingsDependency,
+    database: DatabaseDependency,
+) -> TurnAnalysisJobRead:
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "database_not_configured", "message": "数据库尚未配置"},
+        )
+    job = await TurnAnalysisService(session, settings).prepare_retry(
+        str(session_id), str(job_id),
+    )
+    background.add_task(
+        run_turn_analysis, database, settings, str(session_id), str(job.turn_id),
+    )
+    return job
+
+
+@router.patch(
+    "/{session_id}/memory-candidates/{memory_id}",
+    response_model=MemoryCandidateRead,
+    summary="确认或忽略一条结构化记忆证据候选",
+)
+async def update_memory_candidate(
+    session_id: UUID,
+    memory_id: UUID,
+    payload: MemoryCandidateUpdate,
+    session: SessionDependency,
+    settings: SettingsDependency,
+) -> MemoryCandidateRead:
+    return await TurnAnalysisService(session, settings).update_memory(
+        str(session_id), str(memory_id), payload,
+    )
 
 
 @router.get(

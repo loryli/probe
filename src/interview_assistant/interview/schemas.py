@@ -246,6 +246,115 @@ class TurnDecision(InputModel):
     followups_used: int = 0
 
 
+class TurnAnalysisEvidence(InputModel):
+    """模型必须逐字引用本轮回答；服务端会重新定位并排除失配引用。"""
+
+    turn_id: UUID
+    quote: str = Field(min_length=1, max_length=300)
+
+
+class TurnKnowledgePoint(InputModel):
+    topic: str = Field(min_length=1, max_length=80)
+    coverage: Literal["covered", "partial", "missing", "uncertain"]
+
+
+class TurnAnalysisObservation(InputModel):
+    type: Literal[
+        "strength",
+        "missing_detail",
+        "incorrect",
+        "unverified_claim",
+        "communication",
+    ]
+    topic: str = Field(min_length=1, max_length=80)
+    statement: str = Field(min_length=1, max_length=500)
+    confidence: float = Field(ge=0, le=1)
+    evidence: list[TurnAnalysisEvidence] = Field(min_length=1, max_length=3)
+
+
+class TurnTechnicalAccuracy(InputModel):
+    label: Literal["accurate", "plausible_incomplete", "incorrect", "uncertain"]
+    reason: str = Field(min_length=1, max_length=300)
+    evidence: list[TurnAnalysisEvidence] = Field(default_factory=list, max_length=3)
+
+
+class TurnAnalysisDraft(InputModel):
+    schema_version: Literal["turn_analysis.v1"] = "turn_analysis.v1"
+    turn_id: UUID
+    knowledge_points: list[TurnKnowledgePoint] = Field(default_factory=list, max_length=8)
+    observations: list[TurnAnalysisObservation] = Field(default_factory=list, max_length=8)
+    technical_accuracy: TurnTechnicalAccuracy
+    followup_suggestions: list[str] = Field(default_factory=list, max_length=3)
+    warnings: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("followup_suggestions", "warnings")
+    @classmethod
+    def clean_short_list(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value:
+            text = item.strip()[:300]
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned
+
+
+class SessionObservationRead(BaseModel):
+    id: UUID
+    topic: str
+    observation_type: str
+    statement: str
+    confidence: float
+    evidence: list[TurnAnalysisEvidence]
+    created_at: datetime
+
+
+class MemoryCandidateRead(BaseModel):
+    id: UUID
+    source_observation_id: UUID
+    turn_id: UUID
+    topic_key: str
+    observation_type: str
+    statement: str
+    direction: Literal["supports", "contradicts", "unknown"]
+    confidence: float
+    evidence: list[TurnAnalysisEvidence]
+    status: Literal["pending", "confirmed", "rejected"]
+    revision: int
+    observed_at: datetime
+    decided_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryCandidateUpdate(InputModel):
+    status: Literal["confirmed", "rejected"]
+    expected_revision: int = Field(ge=1)
+
+
+class TurnAnalysisJobRead(BaseModel):
+    id: UUID
+    session_id: UUID
+    turn_id: UUID
+    status: Literal["pending", "running", "ready", "failed"]
+    attempt_count: int
+    retryable: bool
+    result: TurnAnalysisDraft | None
+    observations: list[SessionObservationRead]
+    memory_candidates: list[MemoryCandidateRead]
+    elapsed_ms: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class TurnAnalysisList(BaseModel):
+    items: list[TurnAnalysisJobRead]
+
+
 class TurnRead(BaseModel):
     stage: Literal["self_introduction", "project_introduction", "technical"] = "technical"
     id: UUID

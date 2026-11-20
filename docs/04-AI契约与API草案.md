@@ -142,14 +142,21 @@
     {
       "type": "missing_detail",
       "statement": "未说明并发写入下的失效竞态处理",
-      "evidence_refs": [{"turn_id": "turn_08", "start": 18, "end": 34}],
+      "evidence": [{"turn_id": "turn_08", "quote": "我会在写入后清理缓存"}],
       "confidence": 0.77
     }
   ],
-  "technical_accuracy": {"label": "plausible_incomplete", "evidence_refs": []},
-  "followup_suggestions": ["核实缓存更新与失效的顺序"]
+  "technical_accuracy": {
+    "label": "plausible_incomplete",
+    "reason": "说明了更新后的清理动作，但没有覆盖并发窗口",
+    "evidence": [{"turn_id": "turn_08", "quote": "写入后清理缓存"}]
+  },
+  "followup_suggestions": ["核实缓存更新与失效的顺序"],
+  "warnings": []
 }
 ```
+
+当前实现使用连续原文 `quote`，不信任模型计算字符偏移；服务端在指定回答内重新定位，无法匹配的观察排除。结果只形成本场观察，不自动产生长期能力结论。
 
 ### Offline 复盘输出
 
@@ -178,6 +185,8 @@ V1 建议采用 HTTP + SSE：HTTP 提交配置和回答，SSE 推送逐字输出
 | `GET /interviews/{id}/review` | 获取复盘 | 返回部分/完整状态及证据引用。 |
 | `DELETE /interviews/{id}` | 删除场次 | 依删除策略级联删除数据与文件引用。 |
 | `GET /jobs/{id}` | 查询异步任务 | 返回状态、可重试性、失败原因码。 |
+
+当前逐轮分析实际接口以 `/openapi.json` 为准：`GET /interviews/{id}/analyses` 读取任务、观察与记忆证据候选，`POST /interviews/{id}/analyses/{job_id}/retry` 人工重试。重试返回 202，模型调用在响应后执行；读取接口不触发模型。`PATCH /interviews/{id}/memory-candidates/{memory_id}` 以 revision 保护确认/忽略操作；只有 confirmed 候选会进入之后新建计划的冻结快照。
 
 ## 5. API 事件建议
 
