@@ -87,6 +87,7 @@ export interface SessionSummary {
 }
 
 export interface SessionOptions {
+  voice_transcription_configured: boolean
   plans: Array<{
     practice_mode: 'question_bank' | 'resume'
     id: string

@@ -157,7 +157,11 @@ class InterviewService:
             ))
         # 稳定排序：可用计划在前，页面默认选中第一项即可开始。
         plans.sort(key=lambda item: not item.usable)
-        return SessionOptions(plans=plans, model=configuration_status(self.settings))
+        return SessionOptions(
+            plans=plans,
+            model=configuration_status(self.settings),
+            voice_transcription_configured=self.settings.voice_transcription_configured,
+        )
 
     async def require_session(self, session_id: str, *, lock: bool = False) -> InterviewSession:
         query = (

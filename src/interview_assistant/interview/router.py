@@ -40,6 +40,13 @@ from interview_assistant.interview.streaming import (
     run_decision_stream,
     stream_events,
 )
+from interview_assistant.interview.transcription import (
+    MAX_AUDIO_BYTES,
+    TranscriptionRead,
+    accept_audio,
+    get_task,
+    run_transcription,
+)
 
 router = APIRouter(
     prefix="/interviews",
@@ -188,6 +195,59 @@ async def submit_answer_stream(
     )
 
 
+
+
+@router.post(
+    "/{session_id}/transcriptions",
+    response_model=TranscriptionRead,
+    status_code=202,
+    summary="对当前题的录音启动转写，不提交回答",
+    openapi_extra={"requestBody": {"required": True, "content": {
+        "audio/wav": {"schema": {"type": "string", "format": "binary"}},
+    }}},
+)
+async def create_transcription(
+    session_id: UUID,
+    request_id: UUID,
+    turn_id: UUID,
+    request: Request,
+    response: Response,
+    background: BackgroundTasks,
+    session: SessionDependency,
+    database: DatabaseDependency,
+    settings: SettingsDependency,
+) -> TranscriptionRead:
+    if database is None:
+        raise InterviewError("database_not_configured", "数据库尚未配置。", 503)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "audio/wav":
+        raise InterviewError("invalid_voice_format", "录音必须为 WAV 格式。", 415)
+    audio = bytearray()
+    async for chunk in request.stream():
+        if len(audio) + len(chunk) > MAX_AUDIO_BYTES:
+            raise InterviewError("voice_audio_too_large", "单段录音不能超过 3 分钟。", 413)
+        audio.extend(chunk)
+    wav = bytes(audio)
+    job, created = await accept_audio(
+        session, settings, str(session_id), str(turn_id), str(request_id), wav,
+    )
+    if created:
+        background.add_task(run_transcription, database, settings, str(request_id), wav)
+    else:
+        response.status_code = 200
+    response.headers["Cache-Control"] = "no-store"
+    return job
+
+
+@router.get(
+    "/{session_id}/transcriptions/{request_id}",
+    response_model=TranscriptionRead,
+    summary="读取对应录音的转写状态与临时草稿",
+)
+async def read_transcription(
+    session_id: UUID, request_id: UUID, response: Response, session: SessionDependency,
+) -> TranscriptionRead:
+    response.headers["Cache-Control"] = "no-store"
+    return await get_task(session, str(session_id), str(request_id))
 
 
 @router.get("/{session_id}/events", summary="订阅场次进度：生成完成、状态变化或出错时推送完整快照")

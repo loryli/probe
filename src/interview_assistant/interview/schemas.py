@@ -455,6 +455,7 @@ class PlanOption(BaseModel):
 class SessionOptions(BaseModel):
     plans: list[PlanOption]
     model: dict[str, object]
+    voice_transcription_configured: bool = False
 
 
 class ReportCreate(InputModel):

@@ -133,6 +133,25 @@ class InterviewReport(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
+class InterviewTranscription(Base):
+    """语音转写任务与幂等记录；只保存临时文字草稿，从不保存音频。"""
+
+    __tablename__ = "interview_transcription"
+    __table_args__ = (Index("ix_interview_transcription_expires", "expires_at"),)
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="CASCADE"), index=True,
+    )
+    turn_id: Mapped[str] = mapped_column(String(36))
+    audio_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    transcript: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
 class InterviewAnalysisJob(Base):
     """逐轮后台分析任务；持久状态让失败与进程重启后都能人工续接。"""
 

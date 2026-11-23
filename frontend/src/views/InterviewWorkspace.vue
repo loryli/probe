@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import VoiceAnswer from '../components/VoiceAnswer.vue'
 import { useInterview } from '../composables/useInterview'
 import type { InterviewTurn } from '../types'
 
@@ -10,6 +11,7 @@ const recordDialog = ref(false)
 const recordDialogEl = ref<HTMLDialogElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
 const planChoice = ref<HTMLSelectElement | null>(null)
+const answerEditor = ref<HTMLTextAreaElement | null>(null)
 const now = ref(Date.now())
 const observedAt = ref(Date.now())
 let timer: number | undefined
@@ -105,6 +107,11 @@ function scrollToTurn(sequence: number) {
 async function submit() {
   await interview.submitAnswer()
   scrollTranscript()
+}
+function useVoiceDraft(text: string) {
+  if (!interview.canAnswer.value) return
+  interview.answer.value = text
+  void nextTick(() => answerEditor.value?.focus())
 }
 function toggleHistory() { historyOpen.value = !historyOpen.value }
 function openRecordDialog() {
@@ -290,7 +297,11 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
           <div v-if="interview.session.value.status === 'paused'" class="paused-prompt"><strong>练习已暂停</strong><p>{{ interview.answer.value.trim() ? '当前回答草稿仍保留在本页；点击继续后可以接着编辑。' : '点击继续返回作答，也可以直接结束并生成复盘。' }}</p></div>
           <form v-if="interview.session.value.status === 'active' && interview.currentQuestion.value" class="answer-composer" @submit.prevent="submit()">
             <div class="composer-label"><label for="answer-draft">你的回答</label><span>{{ interview.answer.value.length.toLocaleString() }} / 8,000</span></div>
-            <textarea id="answer-draft" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
+            <VoiceAnswer :key="`${interview.session.value.id}:${interview.currentQuestion.value.id}`"
+              :session-id="interview.session.value.id" :turn-id="interview.currentQuestion.value.id"
+              :answer="interview.answer.value" :disabled="!interview.canAnswer.value"
+              :configured="interview.options.value?.voice_transcription_configured" @apply="useVoiceDraft" />
+            <textarea id="answer-draft" ref="answerEditor" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
             <div class="composer-footer"><span>回答会先保存，再开始生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
           </form>
           <div v-else-if="interview.session.value.status === 'completed'" class="report-area">
@@ -306,7 +317,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
         <section v-else class="welcome-panel">
           <div class="welcome-index"><span>01</span><span>练习 · 回答 · 复盘</span><span>2026</span></div>
           <div class="welcome-copy"><p class="eyebrow">YOUR PERSONAL INTERVIEW STUDIO</p><h2>练习，不是背诵。<br /><em>是把思路说清楚。</em></h2><p>用自己的项目和问题做一场有依据的模拟面试。每个回答都会被保存，结束后再回看哪些地方讲清楚了，哪些还值得继续练。</p><button class="welcome-cta" type="button" @click="planChoice?.focus()">从左侧选择计划开始 <span>←</span></button></div>
-          <div class="welcome-foot"><span>文字练习现在可用</span><span class="future-channel"><i></i>语音练习 · 后续设计中</span></div>
+          <div class="welcome-foot"><span>文字练习现在可用</span><span class="future-channel"><i></i>{{ interview.options.value?.voice_transcription_configured ? '已启用语音转写' : '可选语音转写' }}</span></div>
           <div class="welcome-glyph" aria-hidden="true"><div class="glyph-ring ring-a"></div><div class="glyph-ring ring-b"></div><div class="glyph-cursor"></div><span>思</span><small>STAY WITH THE QUESTION</small></div>
         </section>
       </section>

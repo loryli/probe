@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     database_probe_timeout_seconds: PositiveFloat = 3.0
     qwen_api_key: SecretStr | None = Field(default=None, repr=False)
     qwen_model: str | None = None
+    qwen_asr_model: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_timeout_seconds: float = Field(default=120, ge=10, le=300)
     # 简历提取与实时面试分开预算，避免为批处理延长实时等待。
@@ -50,11 +51,11 @@ class Settings(BaseSettings):
             raise ValueError("qwen_base_url 必须是无凭据、查询参数和片段的 HTTP(S) 接口基础地址")
         return value.rstrip("/")
 
-    @field_validator("qwen_model")
+    @field_validator("qwen_model", "qwen_asr_model")
     @classmethod
     def validate_model_name(cls, value: str | None) -> str | None:
         if value is not None and (not value.strip() or len(value) > 150):
-            raise ValueError("qwen_model 需填写有效模型标识，最多 150 字符")
+            raise ValueError("Qwen 模型标识不能为空，最多 150 字符")
         return value.strip() if value else None
 
     @field_validator("database_url")
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
         if url.drivername == "sqlite+aiosqlite" and url.database == ":memory:":
             raise ValueError("SQLite development mode requires a persistent database file")
         return value
+
+    @property
+    def voice_transcription_configured(self) -> bool:
+        return self.qwen_api_key is not None and self.qwen_asr_model is not None
 
     @property
     def resolved_database_url(self) -> str | None:

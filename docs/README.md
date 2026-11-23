@@ -12,6 +12,7 @@
 4. [实时面试状态机与三级分析](./03-实时面试与分析数据流.md)
 5. [Prompt、结构化输出与 API 草案](./04-AI契约与API草案.md)
 6. [开发阶段与验收标准](./05-开发计划与验收标准.md)
+7. [语音面试交互与协议](./06-语音面试交互与协议.md)
 
 前端文档统一位于 [frontend/README.md](frontend/README.md)，包含选型、结构、视觉和运行方式；[BUSINESS_RULES.md](frontend/BUSINESS_RULES.md) 保存必须遵守的业务语义。旧视觉稿、旧组件手册和阶段性审计已删除，历史信息通过 Git 查阅。
 
