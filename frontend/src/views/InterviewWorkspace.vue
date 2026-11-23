@@ -43,7 +43,8 @@ function onRecordDialogCancel(event: Event) {
   if (interview.deleteBusy.value) event.preventDefault()
 }
 
-const selectableSessions = computed(() => interview.sessions.value.filter((item) => item.status !== 'active'))
+const selectableSessions = computed(() => interview.recordSessions.value.filter((item) => item.status !== 'active'))
+const recordBusy = computed(() => interview.recordLoading.value || interview.deleteBusy.value)
 const allSelectableChecked = computed(() => selectableSessions.value.length > 0
   && selectableSessions.value.every((item) => interview.checkedSessionIds.value.includes(item.id)))
 const sessionStatusText = (status: string) => ({ active: '进行中', paused: '已暂停', completed: '已结束' } as Record<string, string>)[status] ?? status
@@ -126,6 +127,7 @@ function openRecordDialog() {
   interview.checkedSessionIds.value = []
   interview.error.value = ''
   recordDialog.value = true
+  void interview.loadRecords(0)
 }
 function closeRecordDialog() {
   if (interview.deleteBusy.value) return
@@ -145,7 +147,7 @@ function onAllSessionCheck(event: Event) {
     : []
 }
 async function confirmDeleteSessions() {
-  if (await interview.deleteSessions()) recordDialog.value = false
+  await interview.deleteSessions()
 }
 function keySubmit(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -303,7 +305,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 
           <details v-if="interview.preservedAnswer.value" class="preserved-answer" open><summary>保留的未提交草稿（当前问题已变化）</summary><p>{{ interview.preservedAnswer.value.question }}</p><pre>{{ interview.preservedAnswer.value.text }}</pre><button class="button button-quiet" type="button" :disabled="!interview.canAnswer.value" @click="interview.restoreAnswer()">载入当前回答框</button></details>
           <div v-if="interview.session.value.status === 'paused'" class="paused-prompt"><strong>练习已暂停</strong><p>{{ interview.answer.value.trim() ? '当前回答草稿仍保留在本页；点击继续后可以接着编辑。' : '点击继续返回作答，也可以直接结束并生成复盘。' }}</p></div>
-          <form v-if="interview.session.value.status === 'active' && interview.currentQuestion.value" class="answer-composer" @submit.prevent="submit()">
+          <form v-if="interview.session.value.status !== 'completed' && interview.currentQuestion.value" class="answer-composer" @submit.prevent="submit()">
             <div class="composer-label">
               <label for="answer-draft">你的回答</label>
               <div class="composer-tools">
@@ -319,6 +321,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
               :session-id="interview.session.value.id" :turn-id="interview.currentQuestion.value.id"
               :answer="interview.answer.value" :disabled="!interview.canAnswer.value"
               :configured="interview.options.value?.voice_transcription_configured"
+              @draft-active="interview.voiceDraftActive.value = $event"
               @microphone-active="microphoneActive = $event" @apply="useVoiceDraft" />
             <textarea id="answer-draft" ref="answerEditor" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
             <div class="composer-footer"><span>回答会先保存，再开始生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
@@ -348,18 +351,25 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
 
   <dialog ref="recordDialogEl" class="record-dialog" aria-labelledby="record-dialog-title" @click.self="closeRecordDialog()" @close="onRecordDialogClose()" @cancel="onRecordDialogCancel($event)">
     <div class="record-dialog-inner">
-      <header class="record-dialog-head"><div><p class="eyebrow">PRACTICE RECORDS</p><h2 id="record-dialog-title">批量删除练习记录</h2></div><button class="record-dialog-close" type="button" aria-label="关闭记录管理" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">×</button></header>
-      <p class="record-dialog-note">删除会连同全部问答、目标进度、逐轮分析、记忆证据与整场复盘一起物理移除，不可恢复；已确认的面试计划不受影响。进行中的场次需先结束或暂停。这里列出最近 {{ interview.sessions.value.length }} 场记录。</p>
-      <div class="record-dialog-tools"><label><input type="checkbox" :checked="allSelectableChecked" :disabled="!selectableSessions.length || interview.deleteBusy.value" @change="onAllSessionCheck($event)" /> 全选可删记录</label><span>已选 {{ interview.checkedSessionIds.value.length }}</span></div>
-      <div v-if="interview.sessions.value.length" class="record-dialog-list">
-        <label v-for="item in interview.sessions.value" :key="item.id" class="record-dialog-row" :class="{ 'row-locked': item.status === 'active' }">
-          <input type="checkbox" :checked="interview.checkedSessionIds.value.includes(item.id)" :disabled="item.status === 'active' || interview.deleteBusy.value" :aria-label="`选择记录：${item.direction || '模拟面试'}`" @change="onSessionCheck(item.id, $event)" />
-          <span class="record-dialog-copy"><strong>{{ item.direction || '模拟面试' }}</strong><small>{{ formatDate(item.created_at) }} · {{ item.answer_count }} 个回答 · {{ sessionStatusText(item.status) }}</small></span>
-          <em v-if="item.status === 'active'">进行中</em>
-        </label>
+      <header class="record-dialog-head"><h2 id="record-dialog-title">练习记录</h2><button class="record-dialog-close" type="button" aria-label="关闭记录管理" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">×</button></header>
+      <p class="record-dialog-note">打开场次可查看问答、复盘与记忆证据。删除会一并移除这些记录，已确认的面试计划仍可使用。</p>
+      <div class="record-dialog-tools"><label><input type="checkbox" :checked="allSelectableChecked" :disabled="!selectableSessions.length || recordBusy" @change="onAllSessionCheck($event)" /> 全选本页可删记录</label><span>已选 {{ interview.checkedSessionIds.value.length }}</span></div>
+      <p v-if="interview.recordError.value" class="record-dialog-note" role="alert">{{ interview.recordError.value }} <button type="button" class="text-action" :disabled="recordBusy" @click="interview.loadRecords()">重新读取</button></p>
+      <p v-if="interview.recordLoading.value" class="record-dialog-note" role="status">正在读取历史记录…</p>
+      <div v-else-if="interview.recordSessions.value.length" class="record-dialog-list" :aria-busy="recordBusy">
+        <div v-for="item in interview.recordSessions.value" :key="item.id" class="record-dialog-row">
+          <input type="checkbox" :checked="interview.checkedSessionIds.value.includes(item.id)" :disabled="item.status === 'active' || recordBusy" :aria-label="`选择记录：${item.direction || '模拟面试'}`" @change="onSessionCheck(item.id, $event)" />
+          <RouterLink v-if="!interview.deleteBusy.value" class="record-dialog-copy" :to="`/interviews/${item.id}`" @click="closeRecordDialog()"><strong>{{ item.direction || '模拟面试' }}</strong><small>{{ formatDate(item.created_at) }} · {{ item.answer_count }} 个回答 · {{ sessionStatusText(item.status) }}</small></RouterLink>
+          <span v-else class="record-dialog-copy">{{ item.direction || '模拟面试' }}</span>
+        </div>
       </div>
-      <p v-else class="record-dialog-empty">还没有面试记录。</p>
-      <footer class="record-dialog-foot"><button class="button button-quiet" type="button" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">取消</button><button class="record-delete-button" type="button" :disabled="!interview.checkedSessionIds.value.length || interview.deleteBusy.value" @click="confirmDeleteSessions()">{{ interview.deleteBusy.value ? '正在删除…' : '删除所选记录' }}</button></footer>
+      <p v-else-if="!interview.recordError.value" class="record-dialog-empty">还没有面试记录。</p>
+      <nav v-if="interview.recordTotal.value > interview.recordPageSize" class="record-dialog-tools" aria-label="练习记录分页">
+        <button class="button button-quiet" type="button" :disabled="recordBusy || !interview.recordOffset.value" @click="interview.loadRecords(interview.recordOffset.value - interview.recordPageSize)">上一页</button>
+        <span aria-live="polite">第 {{ Math.floor(interview.recordOffset.value / interview.recordPageSize) + 1 }} / {{ Math.ceil(interview.recordTotal.value / interview.recordPageSize) }} 页 · 共 {{ interview.recordTotal.value }} 场</span>
+        <button class="button button-quiet" type="button" :disabled="recordBusy || interview.recordOffset.value + interview.recordPageSize >= interview.recordTotal.value" @click="interview.loadRecords(interview.recordOffset.value + interview.recordPageSize)">下一页</button>
+      </nav>
+      <footer class="record-dialog-foot"><button class="button button-quiet" type="button" :disabled="interview.deleteBusy.value" @click="closeRecordDialog()">关闭</button><button class="record-delete-button" type="button" :disabled="!interview.checkedSessionIds.value.length || recordBusy" @click="confirmDeleteSessions()">{{ interview.deleteBusy.value ? '正在删除…' : '删除所选记录' }}</button></footer>
     </div>
   </dialog>
 </template>

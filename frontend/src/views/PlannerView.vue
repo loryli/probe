@@ -3,8 +3,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { apiRequest, postJson } from '../api/common'
 
-interface PlanOptions { resumes: Array<{ id: string; name: string; content_version: number; is_active: boolean }>; versions: Array<{ version: number; name: string; content_sha256: string; created_at: string }>; projects: Array<{ id: string; name: string; source_version: number; tech_stack: string[]; fact_count: number }>; questions: Array<{ id: string; question_text: string; content_version: number }>; question_total: number; selected_resume_id: string | null; selected_version: number | null; model: Record<string, unknown>; limits: Record<string, number> }
-interface Plan { id: string; resume_id: string | null; source_version: number | null; status: string; revision: number; provider: string; schema_version: string; inputs: { mode: 'model' | 'rule'; resume_id: string | null; source_version: number | null; project_ids: string[]; question_ids: string[]; direction: string; project_ratio: number; duration_minutes: number; max_total_followups: number | null }; snapshot: { resume_name: string; projects: Array<{ id: string; name: string; facts: Array<{ id: string; fact_type: string; content: string; evidence_quote: string | null }> }>; questions: Array<{ id: string; question_text: string }> } | null; result: { schema_version: string; session_summary: string; objectives: Array<{ id: string; topic: string; source_preference: string; priority: string; observable_evidence: string[]; project_fact_ids: string[]; question_ids: string[]; time_budget_sec: number; max_followups: number; completion_rule: string }>; source_time_budget_sec: Record<string, number>; opening_buffer_sec: number; closing_buffer_sec: number; duration_target_sec: number; constraints: { max_total_followups: number; duration_is_soft: boolean }; limitations: string[]; notes: { system: string[]; model: string[]; policy: string[] }; coverage: { facts_used: number; facts_total: number; questions_used: number; questions_total: number; projects_used: number; projects_total: number } | null } | null; error_code: string | null; error_message: string | null; elapsed_ms: number | null; created_at: string; confirmed_at: string | null }
+interface PlanMemory {
+  id: string
+  session_id?: string | null
+  topic_key: string
+  statement: string
+  evidence: Array<{ turn_id: string; quote: string }>
+  observed_at: string
+}
+interface PlanOptions { resumes: Array<{ id: string; name: string; content_version: number; is_active: boolean }>; versions: Array<{ version: number; name: string; content_sha256: string; created_at: string }>; projects: Array<{ id: string; name: string; source_version: number; tech_stack: string[]; fact_count: number }>; questions: Array<{ id: string; question_text: string; content_version: number }>; question_total: number; memories: PlanMemory[]; selected_resume_id: string | null; selected_version: number | null; model: Record<string, unknown>; limits: Record<string, number> }
+interface Plan { id: string; resume_id: string | null; source_version: number | null; status: string; revision: number; provider: string; schema_version: string; inputs: { mode: 'model' | 'rule'; resume_id: string | null; source_version: number | null; project_ids: string[]; question_ids: string[]; direction: string; project_ratio: number; duration_minutes: number; max_total_followups: number | null; memory_ids?: string[] | null }; snapshot: { resume_name: string; projects: Array<{ id: string; name: string; facts: Array<{ id: string; fact_type: string; content: string; evidence_quote: string | null }> }>; questions: Array<{ id: string; question_text: string }>; memories?: PlanMemory[] } | null; result: { schema_version: string; session_summary: string; objectives: Array<{ id: string; topic: string; source_preference: string; priority: string; observable_evidence: string[]; project_fact_ids: string[]; question_ids: string[]; time_budget_sec: number; max_followups: number; completion_rule: string }>; source_time_budget_sec: Record<string, number>; opening_buffer_sec: number; closing_buffer_sec: number; duration_target_sec: number; constraints: { max_total_followups: number; duration_is_soft: boolean }; limitations: string[]; notes: { system: string[]; model: string[]; policy: string[] }; coverage: { facts_used: number; facts_total: number; questions_used: number; questions_total: number; projects_used: number; projects_total: number } | null } | null; error_code: string | null; error_message: string | null; elapsed_ms: number | null; created_at: string; confirmed_at: string | null }
 interface PlanSummary { id: string; status: string; resume_id: string | null; source_version: number | null; direction: string; duration_minutes: number; objective_count: number; created_at: string; confirmed_at: string | null }
 
 const options = ref<PlanOptions | null>(null)
@@ -16,6 +24,8 @@ const practiceMode = ref<'question_bank' | 'resume'>('question_bank')
 const selectedVersion = ref(1)
 const selectedProjects = ref<string[]>([])
 const selectedQuestions = ref<string[]>([])
+const selectedMemoryIds = ref<string[]>([])
+const memoryOptions = computed(() => options.value?.memories ?? [])
 const config = ref({ mode: 'model' as 'model' | 'rule', direction: '', duration_minutes: 45, project_ratio: 0.5, max_total_followups: 6 })
 const followupMode = ref<'auto' | 'disabled' | 'limited'>('auto')
 const loading = ref(false)
@@ -60,7 +70,9 @@ async function initialize() {
     await Promise.all([loadOptions(requestedResume || undefined, Number.isInteger(requestedVersion) && requestedVersion > 0 ? requestedVersion : undefined), loadHistory()])
     selectedResume.value = options.value?.selected_resume_id ?? ''
     selectedVersion.value = options.value?.selected_version ?? 1
-    selectAllSources(); dirty.value = false
+    selectAllSources()
+    selectedMemoryIds.value = memoryOptions.value.map((item) => item.id)
+    dirty.value = false
     if (requestedResume) notice.value = `已载入所选简历 v${selectedVersion.value} 的已核对项目。`
   }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取规划资料。' }
@@ -116,6 +128,22 @@ function nextStep() {
 }
 function updateConfig<K extends keyof typeof config.value>(key: K, value: (typeof config.value)[K]) { config.value[key] = value; dirty.value = true }
 function toggle(id: string, list: string[]) { return list.includes(id) ? list.filter((item) => item !== id) : [...list, id] }
+function selectMemories(ids: string[]) {
+  selectedMemoryIds.value = ids
+  dirty.value = true
+}
+async function refreshMemories() {
+  if (loading.value || generating.value) return
+  loading.value = true; error.value = ''
+  try {
+    await loadOptions(selectedResume.value || undefined, selectedVersion.value)
+    const available = new Set(memoryOptions.value.map((item) => item.id))
+    selectMemories(selectedMemoryIds.value.filter((id) => available.has(id)))
+    notice.value = '已刷新已确认记忆。新出现的条目可手动勾选。'
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '无法刷新记忆。'
+  } finally { loading.value = false }
+}
 async function generate() {
   if (generating.value || loading.value) return
   if (practiceMode.value === 'resume' && config.value.mode === 'model' && !modelReady.value) { error.value = '请先配置模型，或选择规则规划。'; return }
@@ -127,6 +155,9 @@ async function generate() {
     mode: practiceMode.value === 'question_bank' ? 'rule' : config.value.mode, resume_id: practiceMode.value === 'resume' ? selectedResume.value : null,
     source_version: practiceMode.value === 'resume' ? selectedVersion.value : null, project_ids: practiceMode.value === 'resume' ? [...selectedProjects.value] : [],
     question_ids: [...selectedQuestions.value], direction: config.value.direction,
+    memory_ids: practiceMode.value === 'resume' && config.value.mode === 'model'
+      ? memoryOptions.value.filter((item) => selectedMemoryIds.value.includes(item.id)).map((item) => item.id)
+      : [],
     duration_minutes: config.value.duration_minutes, project_ratio: practiceMode.value === 'resume' ? config.value.project_ratio : 0,
     max_total_followups: practiceMode.value === 'question_bank' || followupMode.value === 'disabled' ? 0
       : followupMode.value === 'auto' ? null : config.value.max_total_followups,
@@ -209,6 +240,7 @@ async function adjustPlan() {
     await loadOptions(inputs.resume_id ?? undefined, inputs.source_version ?? undefined)
     selectedProjects.value = [...inputs.project_ids]
     selectedQuestions.value = [...inputs.question_ids]
+    selectedMemoryIds.value = inputs.memory_ids ?? plan.value?.snapshot?.memories?.map((item) => item.id) ?? []
     plan.value = null; dirty.value = true; step.value = 1
   } finally { syncingOptions = false }
 }
@@ -243,6 +275,16 @@ onMounted(() => { void initialize() })
           <div class="result-subhead"><div><p class="eyebrow">WHAT THIS SESSION WILL EXPLORE</p><h3>考察目标</h3></div><span>{{ plan.result.objectives.length }} 项</span></div>
           <article v-for="(objective, index) in plan.result.objectives" :key="objective.id" class="objective-card"><div class="objective-number">{{ String(index + 1).padStart(2, '0') }}</div><div class="objective-main"><div class="objective-title-row"><h4>{{ objective.topic }}</h4><span class="priority-tag" :class="`priority-${objective.priority}`">{{ objective.priority === 'high' ? '高优先级' : objective.priority === 'medium' ? '中优先级' : '低优先级' }}</span></div><p>{{ objective.completion_rule || '根据回答中的可观察证据判断目标覆盖。' }}</p><div class="evidence-list"><span v-for="item in objective.observable_evidence" :key="item">{{ item }}</span></div><div class="objective-meta"><span>{{ objective.source_preference === 'project' ? '项目依据' : '题库依据' }}</span><span>{{ formatTime(objective.time_budget_sec) }}</span><span>最多追问 {{ objective.max_followups }} 次</span></div></div></article>
           <section v-if="plan.result.coverage && plan.resume_id" class="coverage-strip"><div><b>{{ plan.result.coverage.facts_used }} / {{ plan.result.coverage.facts_total }}</b><span>项目事实</span></div><div><b>{{ plan.result.coverage.questions_used }} / {{ plan.result.coverage.questions_total }}</b><span>题库问题</span></div><div><b>{{ plan.result.coverage.projects_used }} / {{ plan.result.coverage.projects_total }}</b><span>项目</span></div></section>
+          <details v-if="plan.snapshot?.memories?.length" class="plan-memory">
+            <summary>计划快照中的记忆 · {{ plan.snapshot.memories.length }} 条</summary>
+            <p class="inline-note">历史证据随计划保留。之后修改记忆状态只影响新计划。</p>
+            <article v-for="item in plan.snapshot.memories" :key="item.id">
+              <strong>{{ item.topic_key }}</strong>
+              <p>{{ item.statement }}</p>
+              <blockquote v-for="quote in item.evidence" :key="`${quote.turn_id}:${quote.quote}`">{{ quote.quote }}</blockquote>
+              <RouterLink v-if="item.session_id" :to="`/interviews/${item.session_id}`">查看来源场次 →</RouterLink>
+            </article>
+          </details>
           <div v-if="plan.result.limitations.length || plan.result.notes?.policy?.length" class="limitations"><p class="eyebrow">需要留意</p><p v-for="item in [...plan.result.limitations, ...(plan.result.notes?.policy || [])]" :key="item">{{ item }}</p></div>
           <footer class="plan-result-footer"><span>依据快照已固定；再次调整会创建一份新计划。</span><button v-if="plan.status === 'ready'" class="button button-primary" :disabled="loading" @click="confirmPlan()">确认计划</button><RouterLink v-else-if="plan.status === 'confirmed'" class="button button-primary" :to="{ path: '/interviews', query: { plan: plan.id } }">按此计划开始练习 ↗</RouterLink><span v-else>当前状态不可确认</span></footer>
         </template>
@@ -270,6 +312,22 @@ onMounted(() => { void initialize() })
           </div>
           <div v-else-if="step === 2" class="plan-step"><div class="step-intro"><span>02</span><div><h3>材料范围</h3><p>候选资料池决定 Planner 可引用什么。题库目标依据会用已启用的题干。</p></div></div><template v-if="practiceMode === 'resume'"><div class="source-heading"><b>项目经历</b><button class="text-action" @click="selectedProjects = selectedProjects.length ? [] : projectsForVersion.map((item) => item.id)">{{ selectedProjects.length ? '清空' : '全选' }}</button></div><label v-for="item in projectsForVersion" :key="item.id" class="source-option"><input type="checkbox" :checked="selectedProjects.includes(item.id)" @change="selectedProjects = toggle(item.id, selectedProjects); dirty = true"/><span><strong>{{ item.name }}</strong><small>{{ item.fact_count }} 条已保存事实 · {{ item.tech_stack.join(' / ') }}</small></span><i>v{{ item.source_version }}</i></label><p v-if="!projectsForVersion.length" class="inline-note">该版本尚无项目事实。可只使用题库题。</p></template><div class="source-heading second-source"><b>个人题库 · {{ options?.question_total || 0 }} 道可用题，已选 {{ selectedQuestions.length }} / {{ maxQuestions }}</b><span class="source-actions"><button class="text-action" @click="selectedQuestions = sampleQuestions(); dirty = true">随机重选 {{ maxQuestions }} 道</button><button class="text-action" @click="selectedQuestions = []; dirty = true">清空</button></span></div><p v-if="options && !options.question_total" class="inline-note">还没有可用题目。<RouterLink to="/">先去个人题库导入、创建或启用题目 →</RouterLink></p><div class="question-source-list"><label v-for="item in options?.questions" :key="item.id" class="question-source"><input type="checkbox" :checked="selectedQuestions.includes(item.id)" @change="toggleQuestion(item.id)"/><span>{{ item.question_text }}</span><small>v{{ item.content_version }}</small></label></div></div>
           <div v-else class="plan-step"><div class="step-intro"><span>03</span><div><h3>方向与节奏</h3><p>规划关注点和时间预算，系统会在目标内部动态提问。</p></div></div><div class="form-grid"><label class="wide-field">训练方向<input :value="config.direction" maxlength="500" placeholder="例如：RAG 可靠性、Agent 状态管理与服务交付" @input="updateConfig('direction', ($event.target as HTMLInputElement).value)"/></label><label>目标时长<select :value="config.duration_minutes" @change="updateConfig('duration_minutes', Number(($event.target as HTMLSelectElement).value))"><option v-for="minutes in [20,30,45,60,90,120]" :key="minutes" :value="minutes">{{ minutes }} 分钟</option></select></label><label v-if="practiceMode === 'resume'">追问设置<select v-model="followupMode" @change="dirty = true"><option value="auto">自动分配额度</option><option value="disabled">禁止额外追问</option><option value="limited">指定全场上限</option></select></label><label v-if="practiceMode === 'resume' && followupMode === 'limited'">追问总上限<input type="number" min="1" max="30" :value="config.max_total_followups" @input="updateConfig('max_total_followups', Number(($event.target as HTMLInputElement).value))"/></label></div><div v-if="practiceMode === 'resume'" class="ratio-control"><div><b>题源时间比例</b><small>当前项目资料 {{ projectsForVersion.length }} 组 · 题库 {{ options?.questions.length || 0 }} 道</small></div><label>项目 {{ sourceBalance }}%<input type="range" min="0" max="100" :value="sourceBalance" @input="updateConfig('project_ratio', Number(($event.target as HTMLInputElement).value) / 100)"/></label><label>题库 {{ 100 - sourceBalance }}%</label></div><p class="inline-note">目标时长用于节奏参考，不代表强制结束时间。追问边界由总预算和目标约束共同决定。</p></div>
+          <details v-if="step === 3 && practiceMode === 'resume' && config.mode === 'model'" class="plan-memory">
+            <summary>本次采用的记忆 · {{ memoryOptions.filter((item) => selectedMemoryIds.includes(item.id)).length }} / {{ memoryOptions.length }}</summary>
+            <p class="inline-note">最多显示最近 30 条已确认记忆，仅供调整考察优先级。取消勾选只影响本次计划。</p>
+            <div class="source-actions">
+              <button type="button" class="text-action" :disabled="loading || generating" @click="refreshMemories()">刷新记忆</button>
+              <button type="button" class="text-action" :disabled="loading || generating || !memoryOptions.length" @click="selectMemories([])">全部排除</button>
+              <button type="button" class="text-action" :disabled="loading || generating || !memoryOptions.length" @click="selectMemories(memoryOptions.map((item) => item.id))">全部采用</button>
+            </div>
+            <p v-if="!memoryOptions.length" class="inline-note">暂无已确认记忆。可在面试记录中查看和确认带证据的候选。</p>
+            <article v-for="item in memoryOptions" :key="item.id">
+              <label><input type="checkbox" :checked="selectedMemoryIds.includes(item.id)" :disabled="loading || generating" @change="selectMemories(toggle(item.id, selectedMemoryIds))" /> <strong>{{ item.topic_key }}</strong></label>
+              <p>{{ item.statement }}</p>
+              <blockquote v-for="quote in item.evidence" :key="`${quote.turn_id}:${quote.quote}`">{{ quote.quote }}</blockquote>
+              <RouterLink v-if="item.session_id" :to="`/interviews/${item.session_id}`">查看来源场次 →</RouterLink>
+            </article>
+          </details>
           <footer class="step-footer"><button class="button button-outline" :disabled="step === 1" @click="step--">← 上一步</button><span>第 {{ step }} / 3 步 · 此处仅收集配置</span><button v-if="step < 3" class="button button-primary" @click="nextStep()">继续 →</button><button v-else class="button button-primary" :disabled="generating || loading" @click="generate()">{{ generating ? '正在生成…' : '生成计划' }} ↗</button></footer>
           </fieldset>
         </template>

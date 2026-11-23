@@ -78,6 +78,7 @@ from interview_assistant.planner.text import plain_text
 from typing import TYPE_CHECKING
 
 from interview_assistant.interview.errors import InterviewError
+from interview_assistant.interview.execution import check_execution_owner, execution_lease
 
 if TYPE_CHECKING:
     from interview_assistant.interview.service import InterviewService
@@ -98,6 +99,21 @@ class ReportService:
             return self._report_read(row) if row is not None else None
 
     async def report(
+        self, session_id: str, payload: ReportCreate,
+    ) -> tuple[ReportRead, bool]:
+        async with execution_lease(
+            self.owner.session, session_id, "report", self.owner.settings.qwen_timeout_seconds + 30,
+        ) as acquired:
+            if not acquired:
+                existing = await self.get_report(session_id)
+                if existing is not None and existing.status == "ready":
+                    return existing, False
+                raise InterviewError(
+                    "report_in_progress", "本场复盘正在生成，请稍后刷新查看，无需重复生成", 409,
+                )
+            return await self._generate_report(session_id, payload)
+
+    async def _generate_report(
         self, session_id: str, payload: ReportCreate,
     ) -> tuple[ReportRead, bool]:
         """为已结束的场次生成整场复盘；每场一份，失败行可被重试覆盖。"""
@@ -132,11 +148,14 @@ class ReportService:
             content, error = self._rule_report(runtime, progress, turns), None
 
         async with self.owner.session.begin():
+            await check_execution_owner(self.owner.session)
             row = await self.owner.session.scalar(
                 select(InterviewReport)
                 .where(InterviewReport.session_id == session_id)
                 .with_for_update()
             )
+            if row is not None and row.status == "ready":
+                return self._report_read(row), False
             if row is None:
                 row = InterviewReport(
                     session_id=session_id, status="ready", source="model",

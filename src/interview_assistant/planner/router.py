@@ -38,7 +38,10 @@ async def planner_error_handler(request: Request, error: Exception) -> JSONRespo
     )
 
 
-@router.get("/options", response_model=PlanOptions, summary="读取可选简历版本、已核对项目与启用题目，不调用模型")
+@router.get(
+    "/options", response_model=PlanOptions,
+    summary="读取可选简历版本、项目、题目与已确认记忆，不调用模型",
+)
 async def plan_options(
     session: SessionDependency,
     settings: SettingsDependency,

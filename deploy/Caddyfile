@@ -1,0 +1,40 @@
+# 需要 Caddy 2.8+，通过 systemd 环境文件设置域名和密码哈希。
+https://{$PROBE_DOMAIN} {
+	header {
+		defer
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy same-origin
+		Permissions-Policy "microphone=(self), camera=()"
+		Cache-Control "private, no-store"
+	}
+
+	route {
+		# 覆盖所有路径，包括静态资源、原始 PDF、OpenAPI 和 SSE。
+		basic_auth {
+			{$PROBE_USERNAME} {$PROBE_PASSWORD_HASH}
+		}
+
+		# 浏览器会自动携带 Basic 凭据，写操作需额外限制跨站来源。
+		@crossSite {
+			method POST PUT PATCH DELETE
+			header Sec-Fetch-Site cross-site
+		}
+		respond @crossSite "Cross-site request denied" 403
+
+		@foreignOrigin {
+			method POST PUT PATCH DELETE
+			header Origin *
+			not header Origin https://{$PROBE_DOMAIN}
+		}
+		respond @foreignOrigin "Origin denied" 403
+
+		reverse_proxy 127.0.0.1:8000 {
+			header_up -Authorization
+			# SSE 即时发送，不缓冲面试事件，也不配置模型请求重试。
+			flush_interval -1
+		}
+	}
+}

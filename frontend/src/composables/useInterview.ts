@@ -54,8 +54,9 @@ export function useInterview() {
   const availablePlans = computed(() => options.value?.plans.filter((plan) => plan.usable) ?? [])
   const analysisFor = (turnId: string) => analyses.value.find((item) => item.turn_id === turnId) ?? null
 
+  const voiceDraftActive = ref(false)
   function confirmDiscard() {
-    return (!answer.value.trim() && !preservedAnswer.value) || window.confirm('当前有未提交的回答草稿。离开会放弃草稿，仍要继续吗？')
+    return (!answer.value.trim() && !preservedAnswer.value && !voiceDraftActive.value) || window.confirm('当前有未提交的文字或语音草稿。离开会放弃草稿，仍要继续吗？')
   }
 
   function applySession(next: InterviewSession) {
@@ -284,6 +285,7 @@ export function useInterview() {
     const active = session.value
     const text = answer.value.trim()
     if (!active || !active.current_turn || !text || !canAnswer.value) return
+    if (voiceDraftActive.value && !window.confirm('还有未使用的语音草稿。继续将仅提交回答框中的文字，确认提交吗？')) return
     const token = ++mutationGeneration
     error.value = ''
     notice.value = ''
@@ -357,7 +359,11 @@ export function useInterview() {
     if (session.value.phase === 'self_introduction' || session.value.phase === 'project_introduction') {
       labels.skip = '跳过当前介绍环节并进入下一阶段？未提交的介绍不会保存。'
     }
-    if (['skip', 'end'].includes(action) && !window.confirm(labels[action])) return
+    if (['skip', 'end'].includes(action)) {
+      const warning = voiceDraftActive.value || answer.value.trim() || preservedAnswer.value
+        ? ' 当前未提交的文字或语音草稿将被放弃。' : ''
+      if (!window.confirm(labels[action] + warning)) return
+    }
     const active = session.value
     const token = ++mutationGeneration
     phase.value = 'control'
@@ -438,11 +444,39 @@ export function useInterview() {
     void router.push('/interviews')
   }
 
+  const recordPageSize = 20
+  const recordSessions = ref<SessionSummary[]>([])
+  const recordOffset = ref(0)
+  const recordTotal = ref(0)
+  const recordLoading = ref(false)
+  const recordError = ref('')
+
+  async function loadRecords(offset = recordOffset.value) {
+    if (recordLoading.value) return
+    recordLoading.value = true
+    recordError.value = ''
+    try {
+      let page = await interviewApi.list(offset, recordPageSize)
+      if (!page.items.length && offset > 0) {
+        const lastOffset = Math.max(0, Math.floor((page.total - 1) / recordPageSize) * recordPageSize)
+        page = await interviewApi.list(lastOffset, recordPageSize)
+      }
+      recordSessions.value = page.items
+      recordOffset.value = page.offset
+      recordTotal.value = page.total
+      checkedSessionIds.value = []
+    } catch (cause) {
+      recordError.value = cause instanceof Error ? cause.message : '无法读取历史记录。'
+    } finally {
+      recordLoading.value = false
+    }
+  }
+
   async function deleteSessions(): Promise<boolean> {
     const ids = [...checkedSessionIds.value]
-    if (!ids.length || deleteBusy.value) return false
-    if (sessions.value.some((item) => ids.includes(item.id) && item.status === 'active')) {
-      error.value = '进行中的场次需先结束或暂停，才能删除。'
+    if (!ids.length || deleteBusy.value || recordLoading.value) return false
+    if (recordSessions.value.some((item) => ids.includes(item.id) && item.status === 'active')) {
+      recordError.value = '进行中的场次需先结束或暂停，才能删除。'
       return false
     }
     const currentDeleted = !!session.value && ids.includes(session.value.id)
@@ -453,16 +487,20 @@ export function useInterview() {
     )
     if (!confirmed) return false
     deleteBusy.value = true
+    recordError.value = ''
     error.value = ''
     notice.value = ''
     try {
       const result = await interviewApi.remove(ids)
       checkedSessionIds.value = []
+      recordSessions.value = recordSessions.value.filter((item) => !ids.includes(item.id))
+      recordTotal.value = Math.max(0, recordTotal.value - result.deleted)
       if (currentDeleted) {
         // 先清空草稿，避免路由守卫再次要求确认放弃。
         closeStream()
         answer.value = ''
         preservedAnswer.value = null
+        voiceDraftActive.value = false
         liveText.value = ''
         session.value = null
         report.value = null
@@ -472,11 +510,17 @@ export function useInterview() {
         phase.value = 'idle'
         await router.push('/interviews')
       }
-      sessions.value = (await interviewApi.list()).items
       notice.value = `已删除 ${result.deleted} 场练习记录。`
+      sessions.value = sessions.value.filter((item) => !ids.includes(item.id))
+      await loadRecords()
+      try {
+        sessions.value = (await interviewApi.list()).items
+      } catch {
+        // 删除已完成，保留最近场次列表中尚未删除的条目。
+      }
       return true
     } catch (cause) {
-      error.value = cause instanceof ApiError ? cause.message : '删除记录失败，请刷新后重试。'
+      recordError.value = cause instanceof ApiError ? cause.message : '删除记录失败，请刷新后重试。'
       return false
     } finally {
       deleteBusy.value = false
@@ -490,7 +534,7 @@ export function useInterview() {
     if (!confirmDiscard()) return false
   })
   function protectDraft(event: BeforeUnloadEvent) {
-    if (!answer.value.trim() && !preservedAnswer.value) return
+    if (!answer.value.trim() && !preservedAnswer.value && !voiceDraftActive.value) return
     event.preventDefault()
     event.returnValue = ''
   }
@@ -526,9 +570,10 @@ export function useInterview() {
     analysisError, analysisFor,
     selectedPlan, mode, answer, preservedAnswer, restoreAnswer, liveText, phase,
     pageBusy, reportBusy, deleteBusy, checkedSessionIds, error, notice, sessionId,
-    currentQuestion, isLocked, canAnswer,
+    currentQuestion, isLocked, canAnswer, voiceDraftActive,
     availablePlans, initialize, start, submitAnswer, retry, control, refresh,
     generateReport, loadSession, loadReport, loadAnalyses, retryAnalysis,
     updateMemoryCandidate, newSession, deleteSessions,
+    recordSessions, recordOffset, recordTotal, recordPageSize, recordLoading, recordError, loadRecords,
   }
 }

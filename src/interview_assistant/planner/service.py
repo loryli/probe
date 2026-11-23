@@ -28,6 +28,7 @@ from interview_assistant.planner.prompt import (
 from interview_assistant.planner.schemas import (
     MAX_FACTS_PER_PROJECT,
     MAX_OBJECTIVES,
+    MAX_PLAN_MEMORIES,
     MAX_PROJECTS,
     MAX_QUESTIONS,
     MAX_QUESTION_TEXT_CHARS,
@@ -323,6 +324,7 @@ class PlannerService:
             projects=projects,
             questions=questions,
             question_total=question_total,
+            memories=await self.confirmed_memories(),
             selected_resume_id=selected.id if selected is not None else None,
             selected_version=chosen_version,
             model=configuration_status(self.settings),
@@ -334,6 +336,32 @@ class PlannerService:
                 "option_question_limit": question_total,
             },
         )
+
+    async def confirmed_memories(
+        self, ids: list[UUID] | None = None,
+    ) -> list[SnapshotMemoryEvidence]:
+        if ids == []:
+            return []
+        query = select(MemoryEvidence).where(MemoryEvidence.status == "confirmed")
+        if ids is not None:
+            query = query.where(MemoryEvidence.id.in_([str(item) for item in ids]))
+        rows = list(await self.session.scalars(
+            query.order_by(MemoryEvidence.observed_at.desc(), MemoryEvidence.id)
+            .limit(MAX_PLAN_MEMORIES)
+        ))
+        if ids is not None and len(rows) != len(ids):
+            raise PlannerError(
+                "plan_memory_changed", "部分记忆已被忽略或删除，请刷新记忆后再生成计划", 409,
+            )
+        return [
+            SnapshotMemoryEvidence(
+                id=row.id, session_id=row.session_id, topic_key=row.topic_key,
+                observation_type=row.observation_type, statement=row.statement,
+                direction=row.direction, confidence=row.confidence, observed_at=row.observed_at,
+                evidence=[SnapshotMemoryQuote.model_validate(item) for item in row.evidence_json],
+            )
+            for row in rows
+        ]
 
     async def build_snapshot(self, inputs: PlanInputs) -> tuple[PlanSnapshot, list[str]]:
         """固定所选简历版本、已核对项目事实与启用题目，剔除无效引用。"""
@@ -424,27 +452,10 @@ class PlannerService:
             )
             for row in question_rows
         ]
-        memory_rows = list(await self.session.scalars(
-            select(MemoryEvidence)
-            .where(MemoryEvidence.status == "confirmed")
-            .order_by(MemoryEvidence.observed_at.desc(), MemoryEvidence.id)
-            .limit(30)
-        ))
-        memories = [
-            SnapshotMemoryEvidence(
-                id=row.id,
-                topic_key=row.topic_key,
-                observation_type=row.observation_type,
-                statement=row.statement,
-                direction=row.direction,
-                confidence=row.confidence,
-                evidence=[
-                    SnapshotMemoryQuote.model_validate(item) for item in row.evidence_json
-                ],
-                observed_at=row.observed_at,
-            )
-            for row in memory_rows
-        ]
+        memories = (
+            await self.confirmed_memories(inputs.memory_ids)
+            if inputs.mode == "model" and inputs.resume_id is not None else []
+        )
         return PlanSnapshot(
             snapshot_version=2, resume_id=resume.id if resume else None, resume_name=resume.name if resume else "",
             source_version=inputs.source_version, content_sha256=version.content_sha256 if version else "",

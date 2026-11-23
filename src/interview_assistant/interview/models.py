@@ -24,6 +24,20 @@ content_text = Text().with_variant(LONGTEXT(), "mysql")
 table_options = {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"}
 
 
+class InterviewExecution(Base):
+    """模型执行租约；唯一键在 SQLite 和 MySQL 上共同限制并发调用。"""
+
+    __tablename__ = "interview_execution"
+    __table_args__ = (table_options,)
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("interview_session.id", ondelete="CASCADE"), primary_key=True,
+    )
+    operation: Mapped[str] = mapped_column(String(24), primary_key=True)
+    owner_token: Mapped[str] = mapped_column(String(36), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+
 class InterviewSession(Base):
     """一场面试；创建时冻结计划运行时契约，之后不追随计划或资料的修改。"""
 

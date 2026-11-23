@@ -70,10 +70,17 @@ class StreamBroker:
             self._live[key] = live
             try:
                 loop = asyncio.get_running_loop()
-                loop.call_later(LIVE_TTL_SEC, self._live.pop, key, None)
+                loop.call_later(LIVE_TTL_SEC, self._expire, key)
             except RuntimeError:
                 pass
         return live
+
+    def _expire(self, key: str) -> None:
+        live = self._live.get(key)
+        if live is not None and live.running:
+            asyncio.get_running_loop().call_later(LIVE_TTL_SEC, self._expire, key)
+        else:
+            self._live.pop(key, None)
 
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
         task = asyncio.create_task(coroutine)
@@ -97,6 +104,9 @@ async def run_decision(
     try:
         async with database.sessions() as session:
             await InterviewService(session, settings).decide(session_id, answer_turn_id)
+    except InterviewError:
+        # 已失效或超时的执行不再回写，用户可读取场次并明确重试。
+        logger.info("Interview decision stopped; session_id=%s", session_id)
     except Exception:
         logger.exception("Interview decision task failed; session_id=%s", session_id)
         try:
@@ -138,6 +148,8 @@ async def run_decision_stream(
             await InterviewService(session, settings).decide_stream(
                 session_id, answer_turn_id, emit=live.write,
             )
+    except InterviewError:
+        logger.info("Interview stream decision stopped; session_id=%s", session_id)
     except Exception:
         logger.exception("Interview stream decision failed; session_id=%s", session_id)
         try:

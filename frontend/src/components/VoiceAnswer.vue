@@ -9,7 +9,7 @@ const props = defineProps<{
   disabled: boolean
   configured?: boolean
 }>()
-const emit = defineEmits<{ apply: [text: string]; 'microphone-active': [active: boolean] }>()
+const emit = defineEmits<{ apply: [text: string]; 'microphone-active': [active: boolean]; 'draft-active': [active: boolean] }>()
 
 type Transcription = {
   request_id: string
@@ -18,10 +18,11 @@ type Transcription = {
   transcript: string | null
   error_message: string | null
 }
-type Phase = 'idle' | 'permission' | 'recording' | 'preparing' | 'waiting' | 'unknown' | 'review'
+type Phase = 'idle' | 'permission' | 'recording' | 'preparing' | 'waiting' | 'unknown' | 'failed' | 'review'
 const MAX_SECONDS = 180
 const SAMPLE_RATE = 16_000
 const phase = ref<Phase>('idle')
+watch(phase, (value) => emit('draft-active', value !== 'idle'), { flush: 'sync' })
 const seconds = ref(0)
 const candidate = ref('')
 const notice = ref('')
@@ -47,6 +48,7 @@ let pollTimer: number | undefined
 let requestId = ''
 let pendingAudio: Blob | null = null
 let generation = 0
+let activeRequest: symbol | null = null
 
 function remember(id: string) {
   try {
@@ -66,6 +68,7 @@ function releaseRecording() {
 
 function reset(forget = true) {
   generation += 1
+  activeRequest = null
   releaseRecording()
   window.clearTimeout(pollTimer)
   if (forget && requestId) remember('')
@@ -113,7 +116,6 @@ async function encodeWav(audio: Blob): Promise<Blob> {
 function applyResult(job: Transcription, id: string, token: number) {
   if (token !== generation || job.request_id !== id || job.turn_id !== props.turnId) return
   if (job.status === 'running') {
-    pendingAudio = null
     phase.value = 'waiting'
     notice.value = '正在转写，回答尚未提交。'
     pollTimer = window.setTimeout(() => void readStatus(), 1_500)
@@ -122,6 +124,9 @@ function applyResult(job: Transcription, id: string, token: number) {
     candidate.value = job.transcript
     notice.value = '转写完成，使用后可以在回答框里修改。'
     phase.value = 'review'
+  } else if (pendingAudio && (job.status === 'failed' || job.status === 'expired')) {
+    phase.value = 'failed'
+    notice.value = `${job.error_message || '转写未完成。'} 本页已保留原录音。`
   } else {
     reset()
     notice.value = job.error_message || '未得到可用的转写，可以重录或继续打字。'
@@ -129,8 +134,11 @@ function applyResult(job: Transcription, id: string, token: number) {
 }
 
 async function readStatus() {
+  window.clearTimeout(pollTimer)
   const id = requestId
-  if (!id || props.disabled) return
+  if (!id || props.disabled || activeRequest) return
+  const request = Symbol()
+  activeRequest = request
   const token = generation
   phase.value = 'waiting'
   try {
@@ -147,13 +155,17 @@ async function readStatus() {
     phase.value = 'unknown'
     notice.value = missing ? '服务器还没有收到这段录音，可以按原请求重新上传。'
       : '暂时读不到转写状态，可以再读取一次或继续打字。'
+  } finally {
+    if (activeRequest === request) activeRequest = null
   }
 }
 
 async function upload() {
   const id = requestId
   const audio = pendingAudio
-  if (!id || !audio || props.disabled) return
+  if (!id || !audio || props.disabled || activeRequest) return
+  const request = Symbol()
+  activeRequest = request
   const token = generation
   phase.value = 'waiting'
   canResend.value = false
@@ -170,11 +182,25 @@ async function upload() {
       && error.code !== 'transcription_not_configured') {
       phase.value = 'unknown'
       notice.value = '没收到上传确认，先读取原任务，避免重复转写。'
+    } else if (error instanceof RequestError && error.status === 409) {
+      phase.value = 'unknown'
+      notice.value = '当前状态暂不能转写，录音已保留。恢复作答后先读取原任务状态。'
     } else {
       reset()
       notice.value = error instanceof Error ? error.message : '未能上传录音。'
     }
+  } finally {
+    if (activeRequest === request) activeRequest = null
   }
+}
+
+function retryAudio() {
+  if (phase.value !== 'failed' || !pendingAudio || props.disabled || activeRequest) return
+  if (!window.confirm('用原录音发起一次新的转写？语音服务可能再次计费。')) return
+  generation += 1
+  requestId = crypto.randomUUID()
+  remember(requestId)
+  void upload()
 }
 
 async function prepare(audio: Blob, token: number) {
@@ -182,10 +208,16 @@ async function prepare(audio: Blob, token: number) {
   notice.value = '正在准备录音…'
   try {
     const wav = await encodeWav(audio)
-    if (token !== generation || props.disabled) return
+    if (token !== generation) return
     pendingAudio = wav
     requestId = crypto.randomUUID()
     remember(requestId)
+    if (props.disabled) {
+      phase.value = 'unknown'
+      canResend.value = true
+      notice.value = '录音已保留，恢复作答后可上传转写。'
+      return
+    }
     await upload()
   } catch (error) {
     if (token !== generation) return
@@ -258,14 +290,22 @@ function useCandidate() {
 }
 
 function releaseOnExit() { reset(false) }
-watch(() => props.disabled, (disabled) => { if (disabled && phase.value !== 'idle') reset() })
+watch(() => props.disabled, (disabled) => {
+  if (disabled) {
+    if (phase.value === 'recording') stopRecording()
+    else if (phase.value === 'permission') reset()
+  } else if (requestId && phase.value === 'waiting') {
+    void readStatus()
+  }
+}, { flush: 'sync' })
 onMounted(() => {
   window.addEventListener('pagehide', releaseOnExit)
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as { id: string; turn: string } | null
-    if (saved?.turn === props.turnId && typeof saved.id === 'string' && !props.disabled) {
+    if (saved?.turn === props.turnId && typeof saved.id === 'string') {
       requestId = saved.id
-      void readStatus()
+      phase.value = 'waiting'
+      if (!props.disabled) void readStatus()
     }
   } catch { /* 无会话存储时只保留本页状态。 */ }
 })
@@ -285,9 +325,11 @@ onBeforeUnmount(() => {
       <span v-if="phase === 'recording'" class="voice-recording-time">{{ clock }} / 3:00</span>
       <span v-if="busy" class="spinner" aria-hidden="true"></span>
       <button v-if="phase === 'unknown' && !canResend" class="button button-outline button-small"
-        type="button" @click="readStatus">读取转写状态</button>
+        type="button" :disabled="disabled" @click="readStatus">读取转写状态</button>
       <button v-if="phase === 'unknown' && canResend" class="button button-outline button-small"
-        type="button" @click="upload">重新上传原录音</button>
+        type="button" :disabled="disabled" @click="upload">上传保留的录音</button>
+      <button v-if="phase === 'failed'" class="button button-outline button-small"
+        type="button" :disabled="disabled" @click="retryAudio">用原录音重试</button>
       <button v-if="phase !== 'idle' && phase !== 'review'" class="text-action" type="button"
         @click="reset()">{{ phase === 'recording' ? '取消录音' : '取消并继续打字' }}</button>
       <span v-if="phase === 'idle' && !notice">{{ !supported ? '当前页面无法录音，可继续打字。'

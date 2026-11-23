@@ -16,6 +16,7 @@ from interview_assistant.config import Settings
 from interview_assistant.database import utc_now
 from interview_assistant.interview import rules, variety
 from interview_assistant.interview.analysis import TurnAnalysisService
+from interview_assistant.interview.execution import check_execution_owner, execution_lease
 from interview_assistant.interview.models import (
     InterviewAnalysisJob,
     InterviewReport,
@@ -164,6 +165,7 @@ class InterviewService:
         )
 
     async def require_session(self, session_id: str, *, lock: bool = False) -> InterviewSession:
+        await check_execution_owner(self.session)
         query = (
             select(InterviewSession)
             .where(InterviewSession.id == session_id)
@@ -495,7 +497,11 @@ class InterviewService:
         前端可以点「继续生成下一问」重试这一小步。
         """
         try:
-            await self._ask_next_question(session_id)
+            async with execution_lease(
+                self.session, session_id, "question", self.settings.qwen_timeout_seconds * 2 + 30,
+            ) as acquired:
+                if acquired:
+                    await self._ask_next_question(session_id)
         except InterviewError:
             raise
         except Exception:
@@ -854,6 +860,15 @@ class InterviewService:
         )
 
     async def _run_decision(
+        self, session_id: str, answer_turn_id: str, *, emit: Callable[[str], None] | None,
+    ) -> None:
+        async with execution_lease(
+            self.session, session_id, "decision", self.settings.qwen_timeout_seconds * 3 + 60,
+        ) as acquired:
+            if acquired:
+                await self._execute_decision(session_id, answer_turn_id, emit=emit)
+
+    async def _execute_decision(
         self, session_id: str, answer_turn_id: str, *, emit: Callable[[str], None] | None,
     ) -> None:
         opening_step = await self.opening.advance_answer(session_id, answer_turn_id)

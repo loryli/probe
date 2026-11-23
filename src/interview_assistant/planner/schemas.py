@@ -11,6 +11,7 @@ MAX_FACTS_PER_PROJECT = 12
 MAX_QUESTION_TEXT_CHARS = 200
 MAX_FACT_CHARS = 120
 MODEL_QUESTION_CHARS = 80
+MAX_PLAN_MEMORIES = 30
 
 
 def objective_limit(duration_minutes: int) -> int:
@@ -34,17 +35,15 @@ class PlanInputs(InputModel):
     max_total_followups: int | None = Field(
         default=None, ge=0, le=30, description="null 自动分配；0 禁止额外追问；正整数为全场上限",
     )
+    memory_ids: list[UUID] | None = Field(
+        default=None, max_length=MAX_PLAN_MEMORIES,
+        description="本次采用的已确认记忆；空列表表示不用，null 兼容旧请求的默认选择",
+    )
 
-    @field_validator("project_ids", "question_ids")
+    @field_validator("project_ids", "question_ids", "memory_ids")
     @classmethod
-    def unique_ids(cls, values: list[UUID]) -> list[UUID]:
-        seen: set[UUID] = set()
-        result: list[UUID] = []
-        for value in values:
-            if value not in seen:
-                seen.add(value)
-                result.append(value)
-        return result
+    def unique_ids(cls, values: list[UUID] | None) -> list[UUID] | None:
+        return None if values is None else list(dict.fromkeys(values))
 
     @field_validator("direction")
     @classmethod
@@ -109,6 +108,7 @@ class SnapshotMemoryQuote(InputModel):
 
 class SnapshotMemoryEvidence(InputModel):
     id: UUID
+    session_id: UUID | None = None
     topic_key: str
     observation_type: str
     statement: str
@@ -447,6 +447,7 @@ class PlanOptions(BaseModel):
     projects: list[ProjectOption]
     questions: list[QuestionOption]
     question_total: int
+    memories: list[SnapshotMemoryEvidence]
     selected_resume_id: UUID | None
     selected_version: int | None
     model: dict[str, object]

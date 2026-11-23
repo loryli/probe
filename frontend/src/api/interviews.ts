@@ -58,7 +58,7 @@ const json = (body: unknown): RequestInit => ({
 
 export const interviewApi = {
   options: () => request<SessionOptions>('/interviews/options'),
-  list: () => request<SessionPage>('/interviews?limit=20&offset=0'),
+  list: (offset = 0, limit = 20) => request<SessionPage>(`/interviews?limit=${limit}&offset=${offset}`),
   remove: (ids: string[]) => request<{ deleted: number }>(
     '/interviews/batch-delete', json({ session_ids: ids }),
   ),
