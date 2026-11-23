@@ -9,7 +9,7 @@ const props = defineProps<{
   disabled: boolean
   configured?: boolean
 }>()
-const emit = defineEmits<{ apply: [text: string] }>()
+const emit = defineEmits<{ apply: [text: string]; 'microphone-active': [active: boolean] }>()
 
 type Transcription = {
   request_id: string
@@ -32,6 +32,11 @@ const answerWithCandidate = computed(() => props.answer.trim()
   ? `${props.answer}\n\n${candidate.value}` : candidate.value)
 const busy = computed(() => ['permission', 'preparing', 'waiting'].includes(phase.value))
 const clock = computed(() => `${Math.floor(seconds.value / 60)}:${String(seconds.value % 60).padStart(2, '0')}`)
+watch(
+  () => phase.value === 'permission' || phase.value === 'recording',
+  (active) => emit('microphone-active', active),
+  { flush: 'sync' },
+)
 
 const base = `/interviews/${props.sessionId}/transcriptions`
 const storageKey = `probe:voice:${props.sessionId}`

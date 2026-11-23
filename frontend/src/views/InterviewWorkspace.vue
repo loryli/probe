@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import VoiceAnswer from '../components/VoiceAnswer.vue'
 import { useInterview } from '../composables/useInterview'
+import { useQuestionPlayback } from '../composables/useQuestionPlayback'
 import type { InterviewTurn } from '../types'
 
 const interview = useInterview()
@@ -12,6 +13,13 @@ const recordDialogEl = ref<HTMLDialogElement | null>(null)
 const transcript = ref<HTMLElement | null>(null)
 const planChoice = ref<HTMLSelectElement | null>(null)
 const answerEditor = ref<HTMLTextAreaElement | null>(null)
+const microphoneActive = ref(false)
+const playback = useQuestionPlayback(() => {
+  const question = interview.currentQuestion.value
+  const session = interview.session.value
+  if (!interview.canAnswer.value || !session || !question?.text.trim()) return null
+  return { key: `${session.id}:${question.id}`, text: question.text }
+}, () => microphoneActive.value)
 const now = ref(Date.now())
 const observedAt = ref(Date.now())
 let timer: number | undefined
@@ -296,11 +304,22 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
           <details v-if="interview.preservedAnswer.value" class="preserved-answer" open><summary>保留的未提交草稿（当前问题已变化）</summary><p>{{ interview.preservedAnswer.value.question }}</p><pre>{{ interview.preservedAnswer.value.text }}</pre><button class="button button-quiet" type="button" :disabled="!interview.canAnswer.value" @click="interview.restoreAnswer()">载入当前回答框</button></details>
           <div v-if="interview.session.value.status === 'paused'" class="paused-prompt"><strong>练习已暂停</strong><p>{{ interview.answer.value.trim() ? '当前回答草稿仍保留在本页；点击继续后可以接着编辑。' : '点击继续返回作答，也可以直接结束并生成复盘。' }}</p></div>
           <form v-if="interview.session.value.status === 'active' && interview.currentQuestion.value" class="answer-composer" @submit.prevent="submit()">
-            <div class="composer-label"><label for="answer-draft">你的回答</label><span>{{ interview.answer.value.length.toLocaleString() }} / 8,000</span></div>
+            <div class="composer-label">
+              <label for="answer-draft">你的回答</label>
+              <div class="composer-tools">
+                <button v-if="playback.supported" class="button button-outline button-small question-playback"
+                  type="button" :disabled="!interview.canAnswer.value || microphoneActive" @click="playback.toggle">
+                  {{ playback.state.value === 'idle' ? '朗读本题' : '停止朗读' }}
+                </button>
+                <span>{{ interview.answer.value.length.toLocaleString() }} / 8,000</span>
+              </div>
+            </div>
+            <p v-if="playback.error.value" class="playback-notice" role="status">{{ playback.error.value }}</p>
             <VoiceAnswer :key="`${interview.session.value.id}:${interview.currentQuestion.value.id}`"
               :session-id="interview.session.value.id" :turn-id="interview.currentQuestion.value.id"
               :answer="interview.answer.value" :disabled="!interview.canAnswer.value"
-              :configured="interview.options.value?.voice_transcription_configured" @apply="useVoiceDraft" />
+              :configured="interview.options.value?.voice_transcription_configured"
+              @microphone-active="microphoneActive = $event" @apply="useVoiceDraft" />
             <textarea id="answer-draft" ref="answerEditor" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
             <div class="composer-footer"><span>回答会先保存，再开始生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
           </form>
