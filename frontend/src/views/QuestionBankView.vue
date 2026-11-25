@@ -271,7 +271,7 @@ onMounted(() => { void reload() })
 
 <template>
   <main class="work-page bank-page">
-    <div class="page-heading"><div><p class="eyebrow">YOUR KNOWLEDGE, IN YOUR WORDS</p><h1>个人题库</h1><p class="heading-intro">收集问题，保留自己的答案。需要时，随时回到原文和来源。</p></div><div class="heading-actions" :inert="bulkBusy || undefined"><button class="button button-outline" type="button" :disabled="bulkBusy || busy" :aria-pressed="bulkMode" @click="toggleBulkMode()">{{ bulkMode ? '完成批量管理' : '批量管理' }}</button><label class="button button-outline file-button">导入 Markdown<input type="file" accept=".md,.markdown,text/markdown" @change="acceptFile(($event.target as HTMLInputElement).files?.[0])" /></label><button class="button button-primary" type="button" @click="setQuestion(null, true)">＋ 新建题目</button></div></div>
+    <div class="page-heading"><div><p class="eyebrow">YOUR KNOWLEDGE, IN YOUR WORDS</p><h1>个人题库</h1></div><div class="heading-actions" :inert="bulkBusy || undefined"><button class="button button-outline" type="button" :disabled="bulkBusy || busy" :aria-pressed="bulkMode" @click="toggleBulkMode()">{{ bulkMode ? '完成批量管理' : '批量管理' }}</button><label class="button button-outline file-button">导入 Markdown<input type="file" accept=".md,.markdown,text/markdown" @change="acceptFile(($event.target as HTMLInputElement).files?.[0])" /></label><button class="button button-primary" type="button" @click="setQuestion(null, true)">＋ 新建题目</button></div></div>
     <p v-if="bulkBusy" class="bulk-progress" role="status">正在处理所选题目，请稍候…</p><div class="bank-layout">
       <aside class="bank-index" :inert="bulkBusy || undefined">
         <div class="search-wrap"><span>⌕</span><input v-model="search" type="search" placeholder="搜索题干" aria-label="搜索题干" /></div>

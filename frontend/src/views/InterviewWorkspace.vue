@@ -182,7 +182,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
           <div class="start-art" aria-hidden="true"><span class="art-orbit orbit-one"></span><span class="art-orbit orbit-two"></span><span class="art-core">练</span><span class="art-spark">✳</span></div>
           <p class="eyebrow">A SPACE TO THINK</p>
           <h2>把思路<br />说完整。</h2>
-          <p class="start-copy">从一个真实目标开始。练习会根据你的回答推进，而不是照着固定题单往下走。</p>
+          <p class="start-copy">根据你的回答动态推进练习。</p>
 
           <div v-if="interview.availablePlans.value.length" class="start-form">
             <label class="field-label" for="plan-choice">本次训练计划</label>
@@ -324,7 +324,7 @@ onBeforeUnmount(() => { if (timer !== undefined) window.clearInterval(timer) })
               @draft-active="interview.voiceDraftActive.value = $event"
               @microphone-active="microphoneActive = $event" @apply="useVoiceDraft" />
             <textarea id="answer-draft" ref="answerEditor" v-model="interview.answer.value" :disabled="!interview.canAnswer.value" maxlength="8000" rows="4" :placeholder="answerPlaceholder" @keydown="keySubmit"></textarea>
-            <div class="composer-footer"><span>回答会先保存，再开始生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
+            <div class="composer-footer"><span>自动保存后生成下一步</span><button class="button button-submit" type="submit" :disabled="!interview.canAnswer.value || !interview.answer.value.trim()"><span>{{ interview.phase.value === 'saving' ? '提交中' : '提交回答' }}</span><span aria-hidden="true">↑</span></button></div>
           </form>
           <div v-else-if="interview.session.value.status === 'completed'" class="report-area">
             <div v-if="interview.reportBusy.value" class="report-loading"><span class="spinner"></span>正在整理本场复盘，问答记录已安全保存。</div>
